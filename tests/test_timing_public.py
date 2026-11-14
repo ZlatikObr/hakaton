@@ -105,3 +105,31 @@ def test_legal_pages_are_served(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path))
     assert 'не является юридической консультацией' in client.get('/static/terms.html').text
     assert '152-ФЗ' in client.get('/static/privacy.html').text
+
+
+def test_demo_saved_checks_open_by_email_on_other_device(public_app, docx_bytes):
+    laptop, phone, stranger = visitor(public_app), visitor(public_app), visitor(public_app)
+    def login(c, email):
+        code = c.post('/auth/request', json={'email': email}).json()['demo_code']
+        assert c.post('/auth/verify', json={'email': email, 'code': code}).status_code == 200
+    login(laptop, 'u@example.com')
+    job = laptop.post('/jobs', files={'file': ('a.docx', docx_bytes(['Поставка лифта.']))}).json()['job_id']
+    assert laptop.post('/my/jobs', json={'job_id': job, 'filename': 'Лифт.docx'}).json() == {'ok': True}
+    assert phone.get('/jobs/' + job).status_code == 404
+    login(phone, 'u@example.com')
+    assert phone.get('/jobs/' + job).status_code == 200
+    login(stranger, 'other@example.com')
+    assert stranger.get('/jobs/' + job).status_code == 404
+
+
+def test_demo_shared_history_can_be_turned_off(tmp_path, monkeypatch, docx_bytes):
+    for k, v in {'TZ_PUBLIC_ACCESS': 'true', 'TZ_PUBLIC_ORIGIN': 'https://planwithai.online', 'TZ_AUTH_DEMO': 'true', 'TZ_DEMO_SHARED_HISTORY': 'false'}.items():
+        monkeypatch.setenv(k, v)
+    app = create_app(tmp_path)
+    laptop, phone = visitor(app), visitor(app)
+    for c in (laptop, phone):
+        code = c.post('/auth/request', json={'email': 'u@example.com'}).json()['demo_code']
+        c.post('/auth/verify', json={'email': 'u@example.com', 'code': code})
+    job = laptop.post('/jobs', files={'file': ('a.docx', docx_bytes(['Поставка лифта.']))}).json()['job_id']
+    laptop.post('/my/jobs', json={'job_id': job})
+    assert phone.get('/jobs/' + job).status_code == 404

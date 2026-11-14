@@ -107,14 +107,17 @@ def create_app(data_dir=None):
     def current_user(request):
         return accounts.user(request.cookies.get('tz_user', ''))
 
+    demo_shared_history = os.getenv('TZ_DEMO_SHARED_HISTORY', 'true').lower() == 'true'
+
     def owns(request, job_id):
-        # Публичный режим: задание доступно браузеру, который его создал. Сохраненные
-        # проверки открываются и с других устройств, но только при настоящей отправке
-        # писем: в демо-режиме войти можно под любым адресом.
+        # Публичный режим: задание доступно браузеру, который его создал, а сохраненные
+        # в «Мои проверки» — владельцу почты с любого устройства. По решению владельца
+        # сервиса это действует и в демо-режиме, где войти можно под любым адресом
+        # (TZ_DEMO_SHARED_HISTORY=false возвращает привязку к браузеру).
         marker = service.root / job_id / '.owner'
         if marker.is_file() and hmac.compare_digest(marker.read_text(), getattr(request.state, 'owner', '')):
             return True
-        if not accounts.mailer.delivers:
+        if not (accounts.mailer.delivers or (accounts.mailer.demo and demo_shared_history)):
             return False
         email = current_user(request)
         return bool(email) and accounts.has_job(email, job_id)

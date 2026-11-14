@@ -39,7 +39,7 @@ async function api(path, options={}){
 const post=(path,data)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 function alertMessage(m=''){$('alert').textContent=m;$('alert').hidden=!m;}
 const store={get(k){try{return localStorage.getItem(k);}catch{return null;}},set(k,v){try{localStorage.setItem(k,v);}catch{}}};
-const baseName=()=> (filename||'документ').replace(/\.docx$/i,'').trim();
+const baseName=()=> (filename||'документ').replace(/\.(docx|pdf)$/i,'').trim();
 const TITLES={upload:'Проверка ТЗ',loading:'Проверка ТЗ',preview:'Проверка данных',analysis:'Анализ документа',result:'Результат проверки',history:'Мои проверки'};
 const PRIVACY_LABELS={natasha:['Стандартное','Имена, телефоны, почты, адреса и реквизиты.'],spacy:['Альтернативное','Другая модель распознавания имен. Полезно, если стандартное что-то пропустило.'],ensemble:['Усиленное','Скрывает больше, иногда и лишнее. Для документов с большим количеством ФИО.'],rules:['Только контакты и реквизиты','Без распознавания имен.']};
 
@@ -169,7 +169,7 @@ function resetLoadingView(){$('loading-title').textContent='Готовим до�
 async function upload(file){
  if(busy)return;
  if(!$('terms-consent').checked)return alertMessage('Отметьте согласие с условиями сервиса, чтобы загрузить документ.');
- if(!file.name.toLowerCase().endsWith('.docx'))return alertMessage('Выберите документ Word в формате .docx.');
+ if(!/\.(docx|pdf)$/i.test(file.name))return alertMessage('Выберите документ Word (.docx) или PDF с текстовым слоем.');
  if(file.size>12*1024*1024)return alertMessage('Файл больше 12 МБ. Разделите документ на части.');
  busy=true;filename=file.name;alertMessage();resetLoadingView();view('loading',0);
  try{
@@ -288,6 +288,7 @@ function describe(m){
  if(/локальные правила/.test(m))return ['Проверяем правила отправки','Убеждаемся, что скрытые данные не уйдут из сервиса'];
  if((s=/Шаг (\d+)\/(\d+)/.exec(m))){counters.steps=+s[1];return ['Модель читает документ','Шаг '+s[1]+' из '+s[2]+': требования, таблицы, сроки и формулировки'];}
  if(/Ищем нормативные/.test(m)){counters.sources++;return ['Ищем нормативные основания','Законы о закупках, ГОСТ и ОКПД 2 на официальных сайтах'];}
+ if(/Читаем норму из локальной базы/.test(m)){counters.sources++;return ['Читаем норму','Дословный текст 44-ФЗ, 223-ФЗ или ГК РФ из локальной базы'];}
  if(/Сверяем коды по справочнику ОКПД 2/.test(m)){counters.sources++;return ['Сверяем коды ОКПД 2','Официальный классификатор и перечни национального режима ПП № 1875'];}
  if(/Читаем и обезличиваем источник/.test(m)){counters.sources++;return ['Читаем найденный источник','Берем только выдержки, которые подтверждают замечание'];}
  if(/выдержк/i.test(m))return ['Сверяем выдержку из поиска','Страница источника недоступна, используем выдержку с пометкой'];
@@ -387,6 +388,7 @@ function downloadLinks(){
  const base=baseName();const rep=/(^|\s)ТЗ(\s|$)/i.test(base)?'Отчет проверки '+base:'Отчет проверки ТЗ '+base;
  $('report-download').href='/jobs/'+job.job_id+'/report.docx?name='+encodeURIComponent(rep);
  $('corrected-download').href='/jobs/'+job.job_id+'/corrected.docx?name='+encodeURIComponent(base+' (исправленное)');
+ $('corrected-download').hidden=job.source_format==='pdf';
 }
 function renderResult(){
  if(!blockInfo.size&&job?.public)indexBlocks();
@@ -394,7 +396,7 @@ function renderResult(){
  $('result-name').textContent=baseName();$('demo-notice').hidden=report.mode!=='offline';
  countUp($('stat-findings'),f.length);countUp($('stat-high'),f.filter(x=>x.severity==='high').length);countUp($('stat-edits'),report.stats?.applied_edits||0);
  countUp($('stat-review'),new Set([...f.flatMap((x,i)=>x.status==='needs_review'?[i+1]:[]),...(report.changes||[]).filter(c=>c.status==='skipped').map(c=>c.finding)]).size);
- $('download-description').textContent=report.stats?.applied_edits?'Правки в ТЗ выделены желтым и записаны исправлениями Word: их можно принять или отклонить.':'Автоматических правок нет: скачивается копия исходника, все замечания в отчете.';
+ $('download-description').textContent=job?.source_format==='pdf'?'Исходник в PDF: правки не вносятся в файл, перенесите их по отчету и вкладке «Правки».':report.stats?.applied_edits?'Правки в ТЗ выделены желтым и записаны исправлениями Word: их можно принять или отклонить.':'Автоматических правок нет: скачивается копия исходника, все замечания в отчете.';
  $('result-summary').textContent=report.review.summary;$('result-regime').textContent=regimeLine(report.stats?.procurement);$('result-regime').hidden=!report.stats?.procurement;downloadLinks();
  selectedChanges.clear();activeTab='findings';activeFilter='all';renderTab();renderAccount();
 }

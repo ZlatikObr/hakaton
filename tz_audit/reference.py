@@ -124,3 +124,22 @@ class Reference:
 @lru_cache(maxsize=1)
 def reference():
     return Reference()
+
+
+@lru_cache(maxsize=1)
+def norms():
+    """Дословные выдержки ключевых норм (КонсультантПлюс, см. data/SOURCE.md): id -> запись."""
+    return {n['id']: n for n in json.loads((DATA / 'norms.json').read_text())}
+
+
+def norm_source(norm_id, source_id):
+    n = norms()[norm_id]
+    text = f'{n["title"]} ({n["edition"]}).\n{n["text"]}'
+    return Source(id=source_id, url=n['url'], title=n['title'] + ' (локальная выдержка)', text=text,
+        retrieved_at=n['fetched'] + 'T00:00:00+00:00', sha256=hashlib.sha256(text.encode()).hexdigest(),
+        retrieval_method='direct', content_type='text/plain')
+
+
+def norm_line(norm_id, prefix):
+    """Строка выдержки, начинающаяся с prefix: дословная цитата для ссылки."""
+    return next(line for line in norms()[norm_id]['text'].split('\n') if line.startswith(prefix))[:2000]

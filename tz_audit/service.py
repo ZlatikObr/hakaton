@@ -8,7 +8,7 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from .agent import Agent, AgentConfig, OpenRouter
-from .document import parse_docx
+from .document import parse_document
 from .models import Document, Report, Review
 from .offline import baseline
 from .privacy import Redactor, PrivacyError, public_payload, release_digest
@@ -62,7 +62,7 @@ class Service:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
     def prepare(self, data, privacy_backend='natasha'):
-        document = parse_docx(data)
+        document, source_format = parse_document(data)
         redactor = Redactor(backend=privacy_backend)
         public = redactor.document(document)
         # Re-scan released JSON, not only standalone paragraphs.
@@ -70,12 +70,12 @@ class Service:
         job_id = secrets.token_hex(16)
         path = self.root / job_id
         path.mkdir(mode=0o700)
-        write_private(path / 'source.docx', data)
+        write_private(path / ('source.' + source_format), data)
         write_private(path / 'document.json', json_bytes(document.model_dump()))
         write_private(path / 'public.json', json_bytes(public_payload(public)))
         write_private(path / 'vault.json', json_bytes(redactor.vault))
         manifest = {'job_id': job_id, 'release_digest': release_digest(public), 'redactions': redactor.counts,
-            'privacy_backend': redactor.backend, 'blocks': len(public.blocks), 'warnings': document.warnings,
+            'privacy_backend': redactor.backend, 'blocks': len(public.blocks), 'warnings': document.warnings, 'source_format': source_format,
             'status': 'prepared', 'privacy_notice': 'Просмотрите public.json локально. NER не гарантирует обнаружение любых ПД. Внешний доступ требует подтверждения digest.'}
         write_private(path / 'manifest.json', json_bytes(manifest))
         return manifest
@@ -158,12 +158,19 @@ class Service:
                     anchor.quote = quote
             control.check()
             control.emit('Применяем минимальные правки и отмечаем изменения в Word')
-            corrected, changes = apply_edits((path / 'source.docx').read_bytes(), original, review, redactor)
+            if (path / 'source.docx').exists():
+                corrected, changes = apply_edits((path / 'source.docx').read_bytes(), original, review, redactor)
+            else:
+                # PDF нельзя исправить с сохранением оформления: правки остаются предложениями в отчете.
+                corrected, changes = None, [{'id': f'f{n}-e{k}', 'operation': 'replace', 'finding': n, 'block_id': e.block_id,
+                    'before': redactor.restore(e.before), 'after': redactor.restore(e.after), 'status': 'skipped', 'selectable': False,
+                    'reason': 'Исходник в PDF: внесите правку в документ вручную.'}
+                    for n, f in enumerate(review.findings, 1) for k, e in enumerate(f.edits, 1)]
             stats.update(applied_edits=sum(c['status'] == 'applied' for c in changes), proposed_edits=len(changes), tracked_changes=any(c['status'] == 'applied' for c in changes))
             report = Report(changes=changes, document_sha256=original.sha256, mode=mode, model=model, review=restored,
                 sources=sources, stats=stats, warnings=original.warnings + [
                     'Правовой режим закупки и применимость норм требуют проверки сотрудником закупок.',
-                    'Номера страниц не вычисляются; привязка выполнена к абзацам и строкам таблиц.',
+                    *(['Номера страниц не вычисляются; привязка выполнена к абзацам и строкам таблиц.'] if (path / 'source.docx').exists() else []),
                     'Отчёт и исходные цитаты могут содержать ПД; хранить локально с ограниченным доступом.',
                 ])
             control.check()
@@ -173,7 +180,8 @@ class Service:
                 manifest = json.loads((path / 'manifest.json').read_text())
                 manifest.update(status='complete', mode=mode)
                 try:
-                    write_private(path / 'corrected.docx', corrected)
+                    if corrected is not None:
+                        write_private(path / 'corrected.docx', corrected)
                     write_private(path / 'report.docx', docx)
                     write_private(path / 'review-public.json', review.model_dump_json(indent=2).encode())
                     write_private(path / 'report.json', report.model_dump_json(indent=2).encode())
@@ -197,6 +205,8 @@ class Service:
     def apply_selected(self, job_id, report_digest, change_ids):
         path = self.path(job_id)
         with self.lock(path):
+            if not (path / 'source.docx').exists():
+                raise JobError('Для PDF правки в документ не вносятся: перенесите их вручную по отчёту.')
             options = self.proposals(job_id)
             allowed = {c['id'] for c in options['changes']}
             if report_digest != options['report_digest']:

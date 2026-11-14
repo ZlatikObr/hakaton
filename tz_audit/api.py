@@ -362,8 +362,8 @@ def create_app(data_dir=None):
     @app.post('/jobs', dependencies=[Depends(authorize)])
     async def prepare(request: Request, file: UploadFile = File(...), privacy_backend: str = Form('natasha')):
         try:
-            if not (file.filename or '').lower().endswith('.docx'):
-                raise HTTPException(400, 'Поддерживается только DOCX.')
+            if not (file.filename or '').lower().endswith(('.docx', '.pdf')):
+                raise HTTPException(400, 'Поддерживаются DOCX и PDF с текстовым слоем.')
             public_quota('upload')
             result = await safe_call(service.prepare, await file.read(MAX_FILE + 1), privacy_backend)
             if anonymous:

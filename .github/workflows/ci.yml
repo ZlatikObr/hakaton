@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Python-зависимости
+        run: |
+          pip install -r requirements.lock
+          pip install --no-deps -e .
+      - name: Тесты Python
+        run: python -m pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Тесты интерфейса
+        run: |
+          npm ci
+          npm test
+
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка и запуск по инструкции README (без .env)
+        run: docker compose up --build -d
+      - name: Сервис отвечает
+        run: |
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8000/health && break; sleep 3; done
+          curl -sf http://127.0.0.1:8000/ | grep -q "Квантара"
+      - name: Демо-проверка примера ТЗ через API
+        run: |
+          TOKEN=ci-token-0123456789-abcdefghij
+          docker compose down
+          echo "TZ_API_TOKEN=$TOKEN" > .env
+          docker compose up -d
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8000/health && break; sleep 3; done
+          JOB=$(curl -sf -H "Authorization: Bearer $TOKEN" -F "file=@examples/Лифт - ТЗ исходное.docx" http://127.0.0.1:8000/jobs | python3 -c "import json,sys;print(json.load(sys.stdin)['job_id'])")
+          curl -sf -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"mode":"offline"}' http://127.0.0.1:8000/jobs/$JOB/analyze > report.json
+          python3 -c "import json;r=json.load(open('report.json'));f=r['review']['findings'];print(len(f),'замечаний');assert f"
+          curl -sf -o report.docx -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/jobs/$JOB/report.docx
+          test -s report.docx
+      - name: Логи при ошибке
+        if: failure()
+        run: docker compose logs --tail 100
+      - name: Остановка
+        if: always()
+        run: docker compose down -v

@@ -11,7 +11,7 @@ from collections import defaultdict
 
 from .crosschecks import crosschecks
 from .models import Anchor, Citation, Edit, Finding, Review
-from .reference import reference
+from .reference import reference, norm_source, norm_line
 
 OKPD_FULL = re.compile(r'(?<![\d.])\d{2}\.\d{2}\.\d{2}\.\d{3}(?![\d.])')
 # Пятизначные номера от 50000 используются для национальных стандартов (ГОСТ Р).
@@ -60,12 +60,23 @@ def _subject_block(blocks):
     return next((b for b in blocks if b.kind == 'paragraph' and len(b.text) > 15), blocks[0])
 
 
+REGISTRY_DENIAL = re.compile(r'(?:наличие|включение)[^.\n]{0,80}реестр[^.\n]{0,80}не является[^.\n]{0,40}требовани\w*|страна происхождения[^.\n]{0,30}(?:не имеет значения|любая|не важна)', re.I)
+
+
 def baseline(document):
     """Вернуть (Review, sources): замечания и выписки справочника, на которые они ссылаются."""
     blocks = document.blocks
     text = '\n'.join(b.text for b in blocks)
     findings, sources = [], []
     ref = reference()
+    norm_ids = {}
+
+    def norm_citation(norm_id, prefix):
+        # Выдержка нормы — локальный источник; цитата дословная.
+        if norm_id not in norm_ids:
+            norm_ids[norm_id] = f'z{len(norm_ids) + 1}'
+            sources.append(norm_source(norm_id, norm_ids[norm_id]))
+        return Citation(source_id=norm_ids[norm_id], quote=norm_line(norm_id, prefix))
 
     def source_for(code):
         source = ref.source(code, f'r{len(sources) + 1}')
@@ -105,6 +116,18 @@ def baseline(document):
             explanation='По локальному справочнику ПП РФ № 1875 для указанных кодов предусмотрены запрет, ограничение или преимущество для российских товаров. В тексте ТЗ нет требований к стране происхождения или указания на национальный режим.',
             recommendation='Проверить, применяется ли национальный режим к закупке, и при необходимости добавить требования к стране происхождения по ПП РФ № 1875.'))
 
+    # 1.1. Фраза о том, что реестр или страна происхождения не важны, противоречит национальному режиму.
+    for block in blocks:
+        match = REGISTRY_DENIAL.search(block.text)
+        if match:
+            findings.append(Finding(category='competition', severity='high', status='needs_review',
+                title='Формулировка о реестре или стране происхождения противоречит национальному режиму',
+                anchors=[Anchor(block_id=block.id, quote=_line(block, match))], basis='external',
+                citations=[norm_citation('44fz_33', '1.1. '), norm_citation('223fz_3_1_4', '1. ')],
+                explanation='Фраза выводит из описания требования к стране происхождения и реестру российской продукции. При действии запрета, ограничения или преимущества по ПП РФ № 1875 товар описывается как российский, такая оговорка противоречит закону.',
+                recommendation='Удалить фразу и указать требования к стране происхождения и подтверждающим документам по мерам ПП РФ № 1875 для кодов ОКПД 2 закупки.'))
+            break
+
     # 2. Обозначения стандартов: номер национального стандарта без «Р».
     for block, match in [(b, m) for b in blocks for m in GOST_WITHOUT_R.finditer(b.text)][:6]:
         before = match.group()
@@ -123,7 +146,8 @@ def baseline(document):
             anchors=[Anchor(block_id=block.id, quote=_line(block, match))],
             explanation='Законодательство о закупках допускает указание товарного знака только со словами «или эквивалент». «Аналог» не задаёт критериев равнозначности и может трактоваться как ограничение конкуренции.',
             recommendation='Заменить «или аналог» на «или эквивалент» и указать параметры эквивалентности.',
-            basis='external', edits=[Edit(block_id=block.id, before=match.group(), after='или эквивалент')]))
+            basis='external', citations=[norm_citation('44fz_33', 'а) ')],
+            edits=[Edit(block_id=block.id, before=match.group(), after='или эквивалент')]))
     model_anchors = []
     for block in blocks:
         if EQUIVALENT.search(block.text) or re.search(r'ГОСТ|\bТУ\b|СНиП|\bСП\s\d', block.text):

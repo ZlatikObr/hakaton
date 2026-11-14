@@ -92,3 +92,48 @@ def parse_docx(data: bytes) -> Document:
         # Parser messages may contain private document content: never surface them.
         raise DocumentError('Повреждённый или неподдерживаемый DOCX.') from None
     return Document(sha256=hashlib.sha256(data).hexdigest(), blocks=blocks, warnings=list(dict.fromkeys(warnings)))
+
+
+def parse_pdf(data):
+    """PDF с текстовым слоем: текст по страницам, абзацы из строк. Сканы без текста отклоняются."""
+    from .pdf_source import extract_pdf
+    from .network import NetworkError
+    if not data or len(data) > MAX_FILE:
+        raise DocumentError('Пустой файл или превышен лимит 12 МБ.')
+    try:
+        text, truncated = extract_pdf(data)
+    except NetworkError:
+        raise DocumentError('Повреждённый или неподдерживаемый PDF.') from None
+    blocks, warnings = [], ['Исходник в PDF: правки в документ не вносятся, перенесите их вручную по отчёту.']
+    if truncated:
+        warnings.append('Проанализированы первые 40 страниц PDF.')
+    for page_number, page in re.findall(r'\[Страница (\d+)\]\n(.*?)(?=\n\[Страница \d+\]\n|\Z)', text, re.S):
+        paragraph, para_n = [], 0
+        def flush():
+            nonlocal paragraph, para_n
+            joined = re.sub(r'\s+', ' ', ' '.join(paragraph)).strip()
+            if joined:
+                para_n += 1
+                blocks.append(Block(id=f'b{len(blocks)+1:04}', text=joined, location=f'страница {page_number}, абзац {para_n}', kind='paragraph'))
+            paragraph = []
+        for line in page.split('\n'):
+            line = line.strip()
+            if not line:
+                flush(); continue
+            # Новый абзац: пункт с номером, маркер или строка после завершенного предложения.
+            if paragraph and (re.match(r'^(?:\d{1,2}(?:\.\d+)*[.)]?\s|[•\-–—]\s)', line) or re.search(r'[.:;!?]$', paragraph[-1])):
+                flush()
+            paragraph.append(line)
+        flush()
+    if not blocks:
+        raise DocumentError('В PDF нет текстового слоя (скан). Распознайте текст (OCR) или загрузите DOCX.')
+    if sum(len(b.text) for b in blocks) > MAX_TEXT:
+        raise DocumentError('Превышен лимит 220 000 символов. Разделите документ локально.')
+    return Document(sha256=hashlib.sha256(data).hexdigest(), blocks=blocks, warnings=warnings)
+
+
+def parse_document(data):
+    """Формат определяется по содержимому, а не по расширению файла."""
+    if data[:5] == b'%PDF-':
+        return parse_pdf(data), 'pdf'
+    return parse_docx(data), 'docx'

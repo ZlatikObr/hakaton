@@ -180,15 +180,15 @@ def test_tools_offer_only_current_reference_and_source_ids():
         def json(self,*a,**kw):self.data=kw['data'];return {}
     transport=Transport();client=OpenRouter('fake',transport)
     client.complete([],AgentConfig(web_enabled=True))
-    assert [t['function']['name'] for t in transport.data['tools']]==['search_norms','submit_review','lookup_okpd2']
+    assert [t['function']['name'] for t in transport.data['tools']]==['search_norms','submit_review','read_norm','lookup_okpd2']
     assert 'reference_id' not in transport.data['tools'][0]['function']['parameters']['properties']
     client.complete([],AgentConfig(web_enabled=True,reference_ids=('n2','c1'),source_ids=('s3',)))
-    search,fetch,_,_=transport.data['tools']
+    search,fetch,*_=transport.data['tools']
     assert search['function']['parameters']['properties']['reference_id']['enum']==['n2','c1']
     assert fetch['function']['parameters']['properties']['source_id']['enum']==['s3']
     # Справочник ОКПД 2 локальный: доступен и без интернета, но не на финальном проходе.
     client.complete([],AgentConfig(web_enabled=False))
-    assert [t['function']['name'] for t in transport.data['tools']]==['submit_review','lookup_okpd2']
+    assert [t['function']['name'] for t in transport.data['tools']]==['submit_review','read_norm','lookup_okpd2']
     client.complete([],AgentConfig(web_enabled=True,review_only=True))
     assert [t['function']['name'] for t in transport.data['tools']]==['submit_review']
 

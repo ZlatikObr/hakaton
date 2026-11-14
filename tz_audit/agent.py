@@ -12,7 +12,7 @@ from .privacy import PrivacyError, check_release, public_payload
 from .research import Research, TOPICS
 from .validation import EvidenceError, validate_review
 from .crosschecks import crosschecks, retain_unaddressed
-from .reference import reference
+from .reference import reference, norm_source
 from .model_profiles import DEFAULT_MODEL, KIMI_PRO, provider_policy, reasoning_policy, route_info
 
 SYSTEM = '''Ты проверяешь техническое задание на закупку на русском языке.
@@ -30,6 +30,8 @@ SYSTEM = '''Ты проверяешь техническое задание на
 - Закон не указан: проверяй требования, общие для обоих законов, и прямо отметь, что режим не задан. Не отказывайся от проверки конкуренции из-за неизвестного режима.
 - СМП = yes: в ТЗ не должно быть требований, несовместимых с закупкой у СМП (крупный опыт, конкретный производитель как условие участия); СМП = no: не должно быть указаний на закупку только у СМП.
 - Национальный режим (ПП РФ от 23.12.2024 № 1875: запреты, ограничения и преимущества): при yes или когда по предмету и ОКПД 2 режим вероятно применим, проверь формулировки о стране происхождения и требования к иностранным товарам без эквивалента; при no не делай замечаний о нацрежиме.
+Локальная база норм (инструмент read_norm, дословные выдержки с consultant.ru): 44fz_33 — ст. 33 44-ФЗ (описание объекта закупки, «или эквивалент», ч. 1.1 о товарах российского происхождения); 223fz_3_6_1 — ч. 6.1 ст. 3 223-ФЗ; 223fz_3_1_4 — ст. 3.1-4 223-ФЗ (национальный режим); gk_724, gk_755 — ГК РФ о гарантии и сроках обнаружения недостатков. Для выводов по этим темам прочитай норму и приведи дословную цитату с source_id вместо basis=external без источника.
+Фраза о том, что наличие в реестре российской продукции или страна происхождения не являются требованием, при мерах ПП № 1875 противоречит закону: предложи удалить её и указать требования к стране происхождения.
 Справочник ОКПД 2 и ПП № 1875 (раздел «Локальный справочник» ниже) — выписка из официального классификатора Росстата и текста ПП РФ № 1875 на сервере, ей можно доверять:
 - Для каждого кода из документа сравни наименование кода с товаром или работой в той же строке. Если код относится к другому товару или разделу (код из раздела, не связанного с предметом закупки), это подтверждённое расхождение: category=classification, status=document_issue, цитата кода и строки, citations на source_id из справочника. Если кода нет в классификаторе, сообщи об этом.
 - Подбирай коды-кандидаты инструментом lookup_okpd2 (поиск по словам классификатора, например «сосуды вакуумные», а не «термос»); предлагай замену кода в edits со ссылкой на источник, решение остаётся за сотрудником.
@@ -119,6 +121,9 @@ TOOLS = [
     tool('fetch_source', 'Прочитать один источник, полученный search_norms.', {
         'type': 'object', 'properties': {'source_id': {'type': 'string'}}, 'required': ['source_id'], 'additionalProperties': False}),
     tool('submit_review', 'Представить окончательный отчёт по схеме.', Review.model_json_schema()),
+    tool('read_norm', 'Прочитать дословную выдержку ключевой нормы из локальной базы (без интернета). Текст можно цитировать по source_id.', {
+        'type': 'object', 'properties': {'norm_id': {'type': 'string', 'enum': ['44fz_33', '223fz_3_6_1', '223fz_3_1_4', 'gk_724', 'gk_755']}},
+        'required': ['norm_id'], 'additionalProperties': False}),
     tool('lookup_okpd2', 'Найти коды ОКПД 2 по словам наименования в локальном справочнике (без интернета). Возвращает коды, наименования, группировки и меры ПП № 1875.', {
         'type': 'object', 'properties': {'query': {'type': 'string', 'minLength': 3, 'maxLength': 120}}, 'required': ['query'], 'additionalProperties': False}),
 ]
@@ -164,7 +169,7 @@ class OpenRouter:
     def complete(self, messages, config):
         available_tools = [deepcopy(TOOLS[2])]
         if not config.review_only:
-            available_tools.append(deepcopy(TOOLS[3]))
+            available_tools += [deepcopy(TOOLS[3]), deepcopy(TOOLS[4])]
         if config.web_enabled and not config.review_only:
             search = deepcopy(TOOLS[0])
             properties = search['function']['parameters']['properties']
@@ -221,6 +226,13 @@ class Agent:
 
         for code in okpd.codes_in(document):
             local_source(code)
+        norm_ids = {}
+
+        def norm(norm_id):
+            if norm_id not in norm_ids:
+                norm_ids[norm_id] = f'z{len(norm_ids) + 1}'
+                local_sources.append(norm_source(norm_id, norm_ids[norm_id]))
+            return next(s for s in local_sources if s.id == norm_ids[norm_id])
 
         def reference_note():
             if not local_sources:
@@ -334,9 +346,9 @@ class Agent:
             for call in calls:
                 control.check()
                 name = call['function']['name']
-                labels = {'search_norms': 'Ищем нормативные источники', 'fetch_source': 'Читаем и обезличиваем источник', 'submit_review': 'Проверяем цитаты и предложенные правки', 'lookup_okpd2': 'Сверяем коды по справочнику ОКПД 2'}
+                labels = {'read_norm': 'Читаем норму из локальной базы', 'search_norms': 'Ищем нормативные источники', 'fetch_source': 'Читаем и обезличиваем источник', 'submit_review': 'Проверяем цитаты и предложенные правки', 'lookup_okpd2': 'Сверяем коды по справочнику ОКПД 2'}
                 control.emit(labels.get(name, 'Блокируем недоступный инструмент'))
-                trace.append({'step': step+1, 'tool': name if name in {'search_norms','fetch_source','submit_review','lookup_okpd2'} else 'denied'})
+                trace.append({'step': step+1, 'tool': name if name in {'search_norms','fetch_source','submit_review','lookup_okpd2','read_norm'} else 'denied'})
                 try:
                     args = json.loads(call['function']['arguments'])
                     if not isinstance(args, dict):
@@ -376,6 +388,12 @@ class Agent:
                         if set(args) != {'source_id'} or not isinstance(args['source_id'], str):
                             raise ValueError()
                         result = evidence_for_model(research.fetch(**args))
+                    elif name == 'read_norm':
+                        if review_only: raise EvidenceError('Сейчас доступен только submit_review; используй уже прочитанные нормы.')
+                        if set(args) != {'norm_id'} or args.get('norm_id') not in {'44fz_33', '223fz_3_6_1', '223fz_3_1_4', 'gk_724', 'gk_755'}:
+                            raise ValueError()
+                        source = norm(args['norm_id'])
+                        result = {'source_id': source.id, 'title': source.title, 'text': source.text}
                     elif name == 'lookup_okpd2':
                         if review_only: raise EvidenceError('Сейчас доступен только submit_review; используй уже полученный справочник.')
                         query = args.get('query')
@@ -385,7 +403,7 @@ class Agent:
                         result = {'results': [{'source_id': local_source(code), **okpd.describe(code)} for code in codes],
                                   'note': 'Цитируй source_id; для пустого результата попробуй слова из наименований классификатора.'}
                     else:
-                        result = {'error': 'Инструмент запрещён. Доступны только search_norms, fetch_source, lookup_okpd2, submit_review.'}
+                        result = {'error': 'Инструмент запрещён. Доступны только search_norms, fetch_source, lookup_okpd2, read_norm, submit_review.'}
                 except (ValueError, TypeError, ValidationError) as exc:
                     # No Pydantic input echo, private content, URLs or provider response in errors.
                     detail = str(exc) if isinstance(exc, (EvidenceError, NetworkError, PrivacyError)) else 'Аргументы не соответствуют схеме. Исправь вызов.'

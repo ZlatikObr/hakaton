@@ -133,8 +133,10 @@ class Service:
             control.check()
             control.emit('Проверяем локальные правила и разрешение на отправку')
             if mode == 'offline':
-                review = validate_review(baseline(public), public, [])
-                sources, stats, model = [], {}, None
+                result = baseline(public)
+                review, sources = result if isinstance(result, tuple) else (result, [])
+                review = validate_review(review, public, sources)
+                stats, model = {}, None
             else:
                 from .privacy import check_release
                 check_release(public, approved_digest)

@@ -10,11 +10,15 @@ from .models import Anchor, Edit, Finding
 
 DIMENSION = re.compile(r'(?<![\w.,])\d{2,5}(?:[.,]\d+)?\s*[xх×]\s*\d{2,5}(?:[.,]\d+)?(?![\d.,]|\s*[xх×]\s*\d)', re.I)
 UNIT = re.compile(r'^\s*(мм|см|м)\b', re.I)
-SCOPE = re.compile(r'предмет\s+закупки\s*:.*?работ\s+по\s+замене\s+([^\n.;|]{3,120})', re.I)
+# «Предмет закупки: выполнение работ по <вид работ> <объект>».
+SCOPE = re.compile(r'предмет\w*\s+(?:закупки|договора|контракта)\s*:.*?работ\w*\s+по\s+([а-яё]+)\s+([^\n.;|]{3,120})', re.I)
+# Вид работ в заголовке спецификации: «ремонтных работ», «работ по монтажу».
+HEADING_WORK = re.compile(r'([а-яё]+ных)\s+работ\b|работ\s+по\s+([а-яё]+)', re.I)
 
 
 def crosschecks(document):
     findings, dimensions = [], []
+    kinds = {b.id: b.kind for b in document.blocks}
     for block in document.blocks:
         # Printer/scanner resolution is not a physical size. Different models
         # and print/scan modes routinely have different pixel counts.
@@ -38,6 +42,9 @@ def crosschecks(document):
         # evidence to inspect, never an implicit conversion.
         if left[0] == right[0] or (left[3] and right[3] and left[3] != right[3]):
             continue
+        # Different rows of one specification usually describe different items.
+        if kinds[left[0]] == kinds[right[0]] == 'table_row':
+            continue
         if sum(a == b for a, b in zip(left[2], right[2])) != 1:
             continue
         key = (left[0], right[0], left[2], right[2])
@@ -51,23 +58,24 @@ def crosschecks(document):
             recommendation='Сопоставить назначения и единицы обоих размеров. Если они описывают один объект, согласовать размер и исправить только ошибочное значение. Автоматический выбор не выполнен.'))
         if len(findings) >= 10:
             break
-    # A specification heading should name the same work as the explicit scope.
-    # Keep this optional: replacement can legitimately be a part of repairs.
+    # A specification heading should name the same kind of work as the explicit
+    # scope. Keep this optional: one kind of work can legitimately include another.
     scope = next(((b, match) for b in document.blocks if (match := SCOPE.search(b.text))), None)
     if scope:
         source, match = scope
-        subject = match.group(1).strip()
+        work, subject = match.group(1), match.group(2).strip()
         for block in document.blocks:
-            if len(block.text) > 250 or not re.search(r'спецификаци[яи]\b', block.text, re.I):
+            if block.id == source.id or len(block.text) > 250 or not re.search(r'спецификаци[яи]\b', block.text, re.I):
                 continue
-            old = re.search(r'ремонтных\s+работ', block.text, re.I)
-            if old:
+            old = HEADING_WORK.search(block.text)
+            kind = old and (old.group(1) or old.group(2))
+            if kind and kind.casefold()[:5] != work.casefold()[:5]:
                 findings.append(Finding(category='completeness', severity='low', status='needs_review',
                     title='Согласовать название спецификации с предметом закупки',
                     anchors=[Anchor(block_id=source.id, quote=source.text[:6000]), Anchor(block_id=block.id, quote=block.text)],
-                    explanation='В предмете закупки явно названа замена оборудования, а заголовок спецификации содержит общее название ремонтных работ.',
-                    recommendation='При подтверждении, что спецификация относится ко всему указанному предмету закупки, уточнить только название работ.',
-                    edits=[Edit(block_id=block.id, before=old.group(), after='работ по замене ' + subject)]))
+                    explanation=f'В предмете закупки указаны работы по {work} {subject}, а заголовок спецификации называет другой вид работ («{old.group()}»).',
+                    recommendation='Если спецификация относится ко всему предмету закупки, привести название работ в заголовке к формулировке предмета.',
+                    edits=[Edit(block_id=block.id, before=old.group(), after=f'работ по {work} {subject}')]))
                 if len(findings) >= 12:
                     break
     return findings

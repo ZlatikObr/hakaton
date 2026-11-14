@@ -219,6 +219,7 @@ flowchart LR
 | `TZ_DATA_DIR` | `runs` (`/data` в Docker) | Каталог заданий |
 | `TZ_RETENTION_HOURS` | `24` | Срок хранения документов, `0` — не удалять |
 | `TZ_PORT` | `8000` | Порт на хосте |
+| `TZ_CPUS` | `1` | Лимит процессоров контейнера |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | — | Отправка кодов входа в личный кабинет |
 | `TZ_AUTH_DEMO` | `false` | Показывать код входа на экране вместо письма (только для демо) |
 | `TZ_COOKIE_SECURE` | `false` | `true`, если сайт открыт по HTTPS |

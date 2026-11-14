@@ -181,7 +181,8 @@ class OpenRouter:
         url = os.getenv('LLM_API_URL', 'https://openrouter.ai/api/v1/chat/completions')
         host = url.split('/')[2]
         openrouter = host == 'openrouter.ai'
-        extra = {**reasoning_policy(config.model), 'provider': provider_policy(config.model)} if openrouter else {}
+        # Рассуждения отключаем у любого провайдера: иначе они съедают лимит ответа и отчет обрезается.
+        extra = {**reasoning_policy(config.model), **({'provider': provider_policy(config.model)} if openrouter else {})}
         return self.transport.json('POST', url, hosts={host},
             retry_rate_limits=True,
             **({'timeout': 120, 'total_timeout': 240} if config.model == KIMI_PRO else {}),

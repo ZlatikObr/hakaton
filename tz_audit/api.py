@@ -1,5 +1,7 @@
 """Local document workbench. HttpOnly same-site session; no remote assets."""
 import hmac
+import json
+import re
 import os
 import secrets
 import threading
@@ -20,10 +22,18 @@ from .models import Strict
 from .network import NetworkError
 from .privacy import PrivacyError, check_release, release_digest, privacy_profiles
 from .service import Service, JobError
+from .accounts import Accounts, AuthError, SESSION_TTL
 from .progress import RunControl, RunCancelled
 from .model_profiles import MODELS, route_info
 
 STATIC = Path(__file__).with_name('static')
+
+
+def download_name(name, fallback):
+    # Имя файла для скачивания: без управляющих символов и разделителей путей.
+    clean = re.sub(r'[\x00-\x1f\x7f\\/:*?"<>|]+', ' ', name or '')
+    clean = re.sub(r'\s+', ' ', clean).strip(' .')[:150]
+    return clean or fallback
 
 
 def create_app(data_dir=None):
@@ -94,6 +104,92 @@ def create_app(data_dir=None):
             'search_backend': os.getenv('TZ_SEARCH_BACKEND', 'openrouter'),
             'privacy_profiles': privacy_profiles(), 'privacy_default': 'natasha'}
 
+    # Необязательный личный кабинет: вход по коду из письма, история проверок.
+    accounts = Accounts(str(service.root))
+    secure_cookie = os.getenv('TZ_COOKIE_SECURE', 'false').lower() == 'true'
+
+    def current_user(request):
+        return accounts.user(request.cookies.get('tz_user', ''))
+
+    class EmailBody(Strict):
+        email: str = Field(min_length=3, max_length=254)
+
+    class CodeBody(Strict):
+        email: str = Field(min_length=3, max_length=254)
+        code: str = Field(min_length=4, max_length=12)
+
+    class AttachBody(Strict):
+        job_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+        filename: str = Field(default='', max_length=300)
+
+    @app.get('/me', dependencies=[Depends(authorize)])
+    def me(request: Request):
+        return {'email': current_user(request), 'mail_enabled': accounts.mailer.enabled,
+            'demo': accounts.mailer.demo and not accounts.mailer.host}
+
+    @app.post('/auth/request', dependencies=[Depends(authorize)])
+    async def auth_request(body: EmailBody):
+        try:
+            code = await run_in_threadpool(accounts.request_code, body.email)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {'sent': True, **({'demo_code': code} if code else {})}
+
+    @app.post('/auth/verify', dependencies=[Depends(authorize)])
+    async def auth_verify(body: CodeBody):
+        try:
+            email, token = await run_in_threadpool(accounts.verify, body.email, body.code)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        response = JSONResponse({'email': email})
+        response.set_cookie('tz_user', token, httponly=True, samesite='lax', secure=secure_cookie, max_age=SESSION_TTL)
+        return response
+
+    @app.post('/auth/logout', dependencies=[Depends(authorize)])
+    def auth_logout(request: Request):
+        accounts.logout(request.cookies.get('tz_user', ''))
+        response = JSONResponse({'email': None})
+        response.delete_cookie('tz_user')
+        return response
+
+    @app.get('/my/jobs', dependencies=[Depends(authorize)])
+    async def my_jobs(request: Request):
+        email = current_user(request)
+        if not email:
+            raise HTTPException(401, 'Войдите по почте, чтобы видеть историю проверок.')
+        items = []
+        for job in accounts.jobs(email):
+            try:
+                path = service.path(job['job_id'])
+            except JobError:
+                continue
+            item = {**job, 'status': 'prepared', 'findings': None, 'high': None, 'edits': None}
+            report_file = path / 'report.json'
+            if report_file.is_file():
+                item['status'] = 'complete'
+                try:
+                    data = json.loads(report_file.read_text())
+                    findings = data['review']['findings']
+                    item.update(findings=len(findings), high=sum(f.get('severity') == 'high' for f in findings),
+                        edits=data.get('stats', {}).get('applied_edits', 0))
+                except Exception:
+                    pass
+            with state_lock:
+                control = progress.get(job['job_id'])
+            if control is not None and control.snapshot()['status'] in {'queued', 'running', 'cancelling'}:
+                item['status'] = 'running'
+            items.append(item)
+        return {'email': email, 'jobs': items}
+
+    @app.post('/my/jobs', dependencies=[Depends(authorize)])
+    async def attach_job(request: Request, body: AttachBody):
+        email = current_user(request)
+        if not email:
+            raise HTTPException(401, 'Войдите по почте, чтобы сохранять проверки.')
+        await safe_call(service.path, body.job_id)
+        await run_in_threadpool(accounts.attach, email, body.job_id, body.filename)
+        return {'ok': True}
+
     class Settings(Strict):
         api_key: str = Field(min_length=16, max_length=300)
 
@@ -160,7 +256,7 @@ def create_app(data_dir=None):
             raise HTTPException(400, 'Выбранная модель не разрешена.')
         key = runtime['key']
         if body.mode == 'openrouter':
-            if not key: raise HTTPException(400, 'Добавьте ключ OpenRouter в настройках.')
+            if not key: raise HTTPException(503, 'Сервис проверки временно недоступен: на сервере не подключена модель.')
             await safe_call(check_release, public, body.approved_digest)
         with state_lock:
             if job_id in progress and progress[job_id].snapshot()['status'] in {'queued', 'running', 'cancelling'}:
@@ -204,16 +300,16 @@ def create_app(data_dir=None):
         return {'status': 'complete' if (path/'report.json').exists() else 'prepared', 'events': []}
 
     @app.get('/jobs/{job_id}/report.{extension}', dependencies=[Depends(authorize)])
-    async def report(job_id: str, extension: Literal['json', 'docx']):
+    async def report(job_id: str, extension: Literal['json', 'docx'], name: str | None = None):
         path = await safe_call(service.path, job_id)
         file = path / ('report.'+extension)
         if not file.is_file() or not (path/'report.json').is_file(): raise HTTPException(404, 'Отчёт пока не создан.')
-        return FileResponse(file, filename='review.'+extension, media_type='application/json' if extension == 'json' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        return FileResponse(file, filename=download_name(name, 'review')+'.'+extension, media_type='application/json' if extension == 'json' else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
     @app.get('/jobs/{job_id}/corrected.docx', dependencies=[Depends(authorize)])
-    async def corrected(job_id: str):
+    async def corrected(job_id: str, name: str | None = None):
         path = await safe_call(service.path, job_id)
         if not (path/'report.json').is_file() or not (path/'corrected.docx').is_file(): raise HTTPException(404, 'Документ пока не готов.')
-        return FileResponse(path/'corrected.docx', filename='specification-edited.docx', media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        return FileResponse(path/'corrected.docx', filename=download_name(name, 'specification-edited')+'.docx', media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
     return app

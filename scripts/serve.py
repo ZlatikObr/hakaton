@@ -16,7 +16,8 @@ def load_local_env():
             if not line or line.startswith('#') or '=' not in line: continue
             if line.startswith('export '): line=line[7:]
             key,value=line.split('=',1);key=key.strip();value=value.strip()
-            if key not in {'OPENROUTER_API_KEY','OPENROUTER_MODEL','TZ_API_TOKEN','TZ_DATA_DIR','TZ_MAX_STEPS','TZ_MAX_OUTPUT_TOKENS','TZ_WEB_ENABLED','TZ_SEARCH_BACKEND','TZ_SEARCH_MODEL','BRAVE_API_KEY'}: continue
+            if key not in {'OPENROUTER_API_KEY','OPENROUTER_MODEL','TZ_API_TOKEN','TZ_DATA_DIR','TZ_MAX_STEPS','TZ_MAX_OUTPUT_TOKENS','TZ_WEB_ENABLED','TZ_SEARCH_BACKEND','TZ_SEARCH_MODEL','BRAVE_API_KEY',
+                'SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASSWORD','SMTP_FROM','TZ_AUTH_DEMO','TZ_COOKIE_SECURE'}: continue
             if len(value)>=2 and value[0]==value[-1] and value[0] in "\"'": value=value[1:-1]
             elif ' #' in value: value=value.split(' #',1)[0].rstrip()
             if value: os.environ[key]=value

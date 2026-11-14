@@ -1,0 +1,22 @@
+[
+  {
+    "id": "mpei_goods",
+    "kind": "unfilled_template",
+    "page": "https://zakupki.mpei.ru/help/Pages/Priobretenie-tovara.aspx",
+    "url": "https://zakupki.mpei.ru/help/SiteAssets/Pages/Priobretenie-tovara/Приложение № 2 ТЗ на товар.docx",
+    "file": "mpei_goods.docx",
+    "sha256": "a6cc808b19dc96d27cef931e8066e3a587f575042a3ae65c49602aece5fdec6e",
+    "blocks": 43,
+    "downloaded_on": "2026-11-12"
+  },
+  {
+    "id": "updk_mfu",
+    "kind": "procurement_specification",
+    "page": "https://zakupki.updk.ru/purchases/132421/",
+    "url": "https://zakupki.updk.ru/upload/iblock/c4b/ywmrkk02w16k8copr0bj49zusbnr97sv/2.-Tekhnicheskoe-zadanie-v-red.-01.10.2024.docx",
+    "file": "updk_mfu.docx",
+    "sha256": "f570f071e54319c5012f73ea80bf26f36575bab7c1dd1e320d67c9df33c3f146",
+    "blocks": 143,
+    "downloaded_on": "2026-11-12"
+  }
+]

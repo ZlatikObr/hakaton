@@ -1,0 +1,7 @@
+{
+  "name": "tz-audit-deepseek-adapter",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test adapter.test.mjs"},
+  "dependencies": {"@deepseek-ai/dsh-tools": "0.0.1-rc.1"}
+}

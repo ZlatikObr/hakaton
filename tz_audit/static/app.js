@@ -144,7 +144,7 @@ async function renderHistory(){
 }
 
 /* upload */
-function reset(){if(busy)return;history.replaceState(null,'','/');job=null;report=null;$('result-save-note').replaceChildren();filename='';$('file-input').value='';$('privacy-approved').checked=false;$('preview-search').value='';alertMessage();view('upload',0);updateReady();}
+function reset(){if(busy)return;resetLoadingView();history.replaceState(null,'','/');job=null;report=null;$('result-save-note').replaceChildren();filename='';$('file-input').value='';$('privacy-approved').checked=false;$('preview-search').value='';alertMessage();view('upload',0);updateReady();}
 $('new-document').onclick=reset;$('replace-file').onclick=reset;$('nav-documents').onclick=reset;
 $('privacy-approved').onchange=updateReady;
 $('start-check').onclick=()=>{
@@ -160,12 +160,13 @@ $('file-input').addEventListener('change',e=>{if(e.target.files[0])upload(e.targ
 for(const ev of ['dragenter','dragover'])$('dropzone').addEventListener(ev,e=>{e.preventDefault();$('dropzone').classList.add('drag-over');});
 for(const ev of ['dragleave','drop'])$('dropzone').addEventListener(ev,e=>{e.preventDefault();$('dropzone').classList.remove('drag-over');});
 $('dropzone').addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)upload(f);});
+function resetLoadingView(){$('loading-title').textContent='Готовим документ';$('loading-description').textContent='Извлекаем текст и таблицы и скрываем персональные данные. Внешних запросов на этом этапе нет.';$('reconnect-button').hidden=true;}
 async function upload(file){
  if(busy)return;
  if(!$('terms-consent').checked)return alertMessage('Отметьте согласие с условиями сервиса, чтобы загрузить документ.');
  if(!file.name.toLowerCase().endsWith('.docx'))return alertMessage('Выберите документ Word в формате .docx.');
  if(file.size>12*1024*1024)return alertMessage('Файл больше 12 МБ. Разделите документ на части.');
- busy=true;filename=file.name;alertMessage();view('loading',0);
+ busy=true;filename=file.name;alertMessage();resetLoadingView();view('loading',0);
  try{
   const data=new FormData();data.append('file',file);data.append('privacy_backend',$('privacy-backend').value);
   const manifest=await api('/jobs',{method:'POST',body:data});
@@ -330,9 +331,17 @@ function stopLive(){clearInterval(ticker);clearInterval(factTimer);ticker=factTi
 $('cancel-button').onclick=async()=>{if(!job)return;$('cancel-button').disabled=true;try{renderProgress(await post('/jobs/'+job.job_id+'/cancel',{}));}catch(e){alertMessage(e.message);$('cancel-button').disabled=false;}};
 $('notify-button').onclick=async()=>{try{const r=await Notification.requestPermission();$('notify-button').textContent=r==='granted'?'Уведомим, когда будет готово':'Уведомления запрещены в браузере';}catch{$('notify-button').textContent='Браузер не поддерживает уведомления';}$('notify-button').disabled=true;};
 function notifyDone(){try{if(document.hidden&&Notification.permission==='granted')new Notification('Проверка ТЗ завершена',{body:baseName()});}catch{}}
+// Мобильная сеть может пропасть на несколько секунд: до потери связи повторяем запрос до 6 раз.
+async function statusWithRetry(id){
+ for(let attempt=0;;attempt++){
+  try{return await api('/jobs/'+id+'/status');}
+  catch(e){if(attempt>=5||/не найден/i.test(e.message))throw e;$('now-detail').textContent='Связь нестабильна, переподключаемся...';await new Promise(r=>setTimeout(r,1000*(attempt+1)));}
+ }
+}
 async function monitor(){
  while(true){
-  const state=await api('/jobs/'+job.job_id+'/status');renderProgress(state);
+  const id=job?.job_id;if(!id)throw new Error('Проверка не найдена. Загрузите документ заново.');
+  const state=await statusWithRetry(id);renderProgress(state);
   if(state.status==='failed'){stopLive();view('preview',1);alertMessage(state.error);return;}
   if(state.status==='cancelled'){stopLive();view('preview',1);alertMessage('Проверка остановлена. Исходный файл сохранен, можно запустить снова.');return;}
   if(state.status==='complete')break;
@@ -340,10 +349,11 @@ async function monitor(){
  }
  progress.done=true;setStage(6);paintProgress((Date.now()-progress.started)/1000);
  await new Promise(r=>setTimeout(r,700));stopLive();notifyDone();
- report=await api('/jobs/'+job.job_id+'/report.json');renderResult();view('result',3);
+ const doneId=job?.job_id;if(!doneId)throw new Error('Проверка не найдена. Загрузите документ заново.');
+ report=await api('/jobs/'+doneId+'/report.json');renderResult();view('result',3);
 }
-function lostConnection(error){busy=true;stopLive();view('loading',2);$('loading-title').textContent='Связь с проверкой прервалась';$('loading-description').textContent='Сервер может продолжать работу. Восстановите связь, чтобы увидеть результат.';$('reconnect-button').hidden=false;alertMessage(error.message);updateReady();}
-$('reconnect-button').onclick=async()=>{$('reconnect-button').disabled=true;try{beginAnalysisView('Продолжаем проверку','openrouter');await monitor();busy=false;$('reconnect-button').hidden=true;alertMessage();updateReady();}catch(e){lostConnection(e);}finally{$('reconnect-button').disabled=false;}};
+function lostConnection(error){busy=false;stopLive();view('loading',2);$('loading-title').textContent='Связь с проверкой прервалась';$('loading-description').textContent='Сервер может продолжать работу. Восстановите связь, чтобы увидеть результат.';$('reconnect-button').hidden=false;alertMessage(error.message);updateReady();}
+$('reconnect-button').onclick=async()=>{if(!job){busy=false;resetLoadingView();reset();return;}busy=true;updateReady();$('reconnect-button').disabled=true;try{beginAnalysisView('Продолжаем проверку','openrouter');await monitor();busy=false;$('reconnect-button').hidden=true;alertMessage();updateReady();}catch(e){lostConnection(e);}finally{$('reconnect-button').disabled=false;}};
 function beginAnalysisView(title,mode){
  const now=Date.now();
  progress={stage:0,pct:0,step:0,max:12,est:estimateFor(mode),started:now,last:now,done:false};counters={steps:0,sources:0,checks:0};lastEvent=0;

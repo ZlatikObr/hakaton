@@ -17,7 +17,7 @@ async function setup(handler,url='http://localhost:8000',before=()=>{}){
  w.scrollTo=()=>{};w.Element.prototype.scrollIntoView=function(){};
  w.fetch=async(path,options={})=>{const r=handler(path,options);const bad=r&&r.__status;return {ok:!bad,status:bad||200,json:async()=>bad?{detail:r.detail}:r};};
  before(w);
- w.eval(js+'\nwindow.testUI={preview(value){job=value;renderPreview();},result(value){report=value;renderTab();},progress:renderProgress,run,monitor};window.app={upload,updateReady,beginAnalysisView,tickProgress,stopLive,setJob(v){job=v;},get progress(){return progress;}};');await tick();return dom;
+ w.eval(js+'\nwindow.testUI={preview(value){job=value;renderPreview();},result(value){report=value;renderTab();},progress:renderProgress,run,monitor};window.app={upload,lostConnection,updateReady,beginAnalysisView,tickProgress,stopLive,setJob(v){job=v;},get progress(){return progress;}};');await tick();return dom;
 }
 test('page loads only local assets and opens help',async()=>{
  const dom=await setup(()=>settings);const d=dom.window.document;
@@ -296,5 +296,47 @@ test('demo mode hides the password field and skips the set-password step',async(
  d.getElementById('login-email-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  d.getElementById('login-code').value='111222';d.getElementById('login-code-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  assert.equal(d.getElementById('login-dialog').open,false);assert.equal(d.getElementById('login-password-form').hidden,true);
+ dom.window.close();
+});
+
+test('after a lost connection a new upload starts clean and reconnect never reads an empty job',async()=>{
+ const id='e'.repeat(32);let statusCalls=0;
+ const dom=await setup((path,options)=>{
+  if(path==='/settings')return settings;
+  if(path==='/jobs'&&options.method==='POST')return {job_id:id};
+  if(path==='/jobs/'+id)return {job_id:id,blocks:0,redactions:{},estimate_seconds:{openrouter:300,offline:4},public:{blocks:[]}};
+  if(path.endsWith('/status')){statusCalls++;return {__status:500,detail:'Сеть недоступна'};}
+  return {};
+ });
+ const d=dom.window.document,w=dom.window,errors=[];w.addEventListener('error',e=>errors.push(e.message));
+ // Связь пропала во время проверки: кнопка «Восстановить связь» видна.
+ w.app.lostConnection(new w.Error('Load failed'));
+ assert.equal(d.getElementById('reconnect-button').hidden,false);
+ // Нажатие без активной проверки возвращает к загрузке, а не падает на job.job_id.
+ w.app.setJob(null);d.getElementById('reconnect-button').click();await tick();
+ assert.equal(d.getElementById('upload-view').hidden,false);assert.deepEqual(errors,[]);
+ // Новая загрузка начинается с чистого экрана и не блокируется.
+ w.app.lostConnection(new w.Error('Load failed'));
+ d.getElementById('terms-consent').checked=true;d.getElementById('terms-consent').dispatchEvent(new w.Event('change'));
+ const up=w.app.upload(new w.File(['x'],'ТЗ.docx'));
+ assert.equal(d.getElementById('reconnect-button').hidden,true);
+ assert.equal(d.getElementById('loading-title').textContent,'Готовим документ');
+ await up;assert.equal(d.getElementById('preview-view').hidden,false);assert.deepEqual(errors,[]);
+ dom.window.close();
+});
+test('a short network drop during a check is retried instead of losing the connection',async()=>{
+ const id='f'.repeat(32);let calls=0;
+ const dom=await setup(path=>{
+  if(path==='/settings')return settings;
+  if(path.endsWith('/run'))return {status:'queued'};
+  if(path.endsWith('/status')){calls++;return calls===1?{__status:502,detail:'Bad gateway'}:{status:'complete',events:[]};}
+  if(path.endsWith('report.json'))return {mode:'offline',stats:{applied_edits:0},review:{summary:'ok',findings:[]},changes:[],sources:[]};
+  return {};
+ });
+ const d=dom.window.document;
+ dom.window.testUI.preview({job_id:id,release_digest:'a'.repeat(64),blocks:0,redactions:{},public:{blocks:[]}});
+ await dom.window.testUI.run('offline');
+ assert.equal(calls,2);assert.equal(d.getElementById('result-view').hidden,false);
+ assert.equal(d.getElementById('reconnect-button').hidden,true);
  dom.window.close();
 });

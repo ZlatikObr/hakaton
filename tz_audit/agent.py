@@ -177,15 +177,19 @@ class OpenRouter:
                 fetch = deepcopy(TOOLS[1])
                 fetch['function']['parameters']['properties']['source_id']['enum'] = list(config.source_ids)
                 available_tools.insert(1, fetch)
-        return self.transport.json('POST', 'https://openrouter.ai/api/v1/chat/completions', hosts={'openrouter.ai'},
+        # Любой OpenAI-совместимый сервис (например, AITunnel): LLM_API_URL и LLM_MODEL_NAME.
+        url = os.getenv('LLM_API_URL', 'https://openrouter.ai/api/v1/chat/completions')
+        host = url.split('/')[2]
+        openrouter = host == 'openrouter.ai'
+        extra = {**reasoning_policy(config.model), 'provider': provider_policy(config.model)} if openrouter else {}
+        return self.transport.json('POST', url, hosts={host},
             retry_rate_limits=True,
             **({'timeout': 120, 'total_timeout': 240} if config.model == KIMI_PRO else {}),
             headers={'Authorization': 'Bearer ' + self.key}, data={
-                'model': config.model, 'messages': messages, 'tools': available_tools,
+                'model': config.model if openrouter else os.getenv('LLM_MODEL_NAME', config.model.split('/')[-1]), 'messages': messages, 'tools': available_tools,
                 'tool_choice': {'type': 'function', 'function': {'name': 'submit_review'}} if config.review_only else 'auto',
                 'max_tokens': config.max_output_tokens,
-                **reasoning_policy(config.model),
-                'provider': provider_policy(config.model),
+                **extra,
             })
 
 class Agent:

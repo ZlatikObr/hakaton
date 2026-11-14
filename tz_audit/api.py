@@ -78,7 +78,7 @@ def create_app(data_dir=None):
     if public_host:
         hosts.append(public_host)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
-    runtime = {'key': os.getenv('OPENROUTER_API_KEY', ''), 'model': os.getenv('OPENROUTER_MODEL', AgentConfig.model)}
+    runtime = {'key': os.getenv('LLM_API_KEY') or os.getenv('OPENROUTER_API_KEY', ''), 'model': os.getenv('OPENROUTER_MODEL', AgentConfig.model)}
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='tz-review')
     progress, state_lock = {}, threading.Lock()
     timings = Timings(service.root)

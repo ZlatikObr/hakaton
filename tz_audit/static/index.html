@@ -250,13 +250,27 @@
 <dialog id="login-dialog">
  <div class="dialog-head"><span class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</span><button type="button" class="icon-button" data-close="login-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div>
  <form id="login-email-form">
-  <h2>Вход по почте</h2>
+  <h2>Вход в личный кабинет</h2>
   <p class="muted">Вход нужен только для того, чтобы проверки сохранялись в «Мои проверки». Без входа проверка работает так же, но результат не сохранится.</p>
   <label class="field-label" for="login-email">Рабочая почта</label>
-  <input id="login-email" type="email" autocomplete="email" placeholder="name@company.ru" required>
+  <input id="login-email" type="email" autocomplete="username" placeholder="name@company.ru" required>
+  <div id="login-password-row" hidden>
+   <label class="field-label" for="login-password">Пароль</label>
+   <input id="login-password" type="password" autocomplete="current-password" placeholder="Если вы его уже задали">
+  </div>
   <label class="approval consent small"><input type="checkbox" id="login-consent" required><span class="checkbox" aria-hidden="true"><svg><use href="#i-check"/></svg></span><span>Согласен на обработку адреса почты для входа и хранения истории проверок по <a href="/static/privacy.html" target="_blank" rel="noopener">политике</a></span></label>
   <p id="login-email-error" class="form-error" role="alert"></p>
-  <button class="button primary full" type="submit"><svg><use href="#i-mail"/></svg>Получить код</button>
+  <button class="button primary full" type="submit" id="login-submit"><svg><use href="#i-mail"/></svg><span id="login-submit-label">Получить код</span></button>
+  <button class="link-button center" type="button" id="login-by-code" hidden>Войти по коду из письма (если нет пароля или забыли его)</button>
+ </form>
+ <form id="login-password-form" hidden>
+  <h2 id="set-password-title">Придумайте пароль</h2>
+  <p class="muted">Чтобы в следующий раз входить без кода из письма. Не короче 8 символов.</p>
+  <input type="email" id="set-password-user" autocomplete="username" hidden>
+  <input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Новый пароль" required>
+  <p id="set-password-error" class="form-error" role="alert"></p>
+  <button class="button primary full" type="submit">Сохранить пароль</button>
+  <button class="link-button center" type="button" id="set-password-skip">Пропустить</button>
  </form>
  <form id="login-code-form" hidden>
   <h2>Введите код</h2>

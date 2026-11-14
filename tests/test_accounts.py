@@ -211,21 +211,21 @@ def test_auth_endpoints_require_local_session(demo_client):
 
 
 def test_me_reports_demo_mode(demo_client):
-    assert demo_client.get('/me', headers=AUTH).json() == {'email': None, 'mail_enabled': True, 'demo': True}
+    assert demo_client.get('/me', headers=AUTH).json() == {'email': None, 'mail_enabled': True, 'demo': True, 'password_enabled': False, 'has_password': False}
 
 
 def test_me_without_mail_configured(tmp_path, monkeypatch):
     monkeypatch.setenv('TZ_API_TOKEN', TOKEN)
     for name in ('TZ_AUTH_DEMO', 'SMTP_HOST', 'SMTP_FROM', 'SMTP_USER'): monkeypatch.delenv(name, raising=False)
     client = TestClient(create_app(tmp_path))
-    assert client.get('/me', headers=AUTH).json() == {'email': None, 'mail_enabled': False, 'demo': False}
+    assert client.get('/me', headers=AUTH).json() == {'email': None, 'mail_enabled': False, 'demo': False, 'password_enabled': False, 'has_password': False}
     response = client.post('/auth/request', headers=AUTH, json={'email': 'user@example.com'})
     assert response.status_code == 400 and 'не настроен' in response.json()['detail']
 
 
 def test_demo_login_sets_httponly_cookie_and_logout(demo_client):
     response = demo_login(demo_client)
-    assert response.json() == {'email': 'user@example.com'}
+    assert response.json() == {'email': 'user@example.com', 'has_password': False}
     cookie = response.headers['set-cookie']
     assert 'tz_user=' in cookie and 'HttpOnly' in cookie and 'samesite=lax' in cookie.lower()
     assert demo_client.get('/me', headers=AUTH).json()['email'] == 'user@example.com'

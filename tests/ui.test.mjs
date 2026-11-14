@@ -250,3 +250,51 @@ test('top call-to-action scrolls to consent first, then to the upload block',asy
  d.getElementById('terms-consent').checked=true;btn.click();assert.equal(scrolled.pop(),'dropzone');
  assert.ok(d.getElementById('dropzone').classList.contains('flash'));dom.window.close();
 });
+
+test('with real mail: password login, and code login offers to set a password',async()=>{
+ const calls=[];
+ const dom=await setup((path,options)=>{const body=options.body&&JSON.parse(options.body);calls.push([path,body]);
+  if(path==='/settings')return settings;
+  if(path==='/me')return {email:null,mail_enabled:true,demo:false,password_enabled:true,has_password:false};
+  if(path==='/auth/password')return body.password==='correct horse'?{email:'u@example.com',has_password:true}:{__status:400,detail:'Неверная почта или пароль.'};
+  if(path==='/auth/request')return {sent:true};
+  if(path==='/auth/verify')return {email:'u@example.com',has_password:false};
+  if(path==='/auth/set-password')return body.password.length>=8?{email:'u@example.com',has_password:true}:{__status:400,detail:'Пароль должен быть длиной от 8 до 128 символов.'};
+  return {};
+ });
+ const d=dom.window.document,w=dom.window,submit=id=>d.getElementById(id).dispatchEvent(new w.Event('submit',{cancelable:true}));
+ d.getElementById('account-action').click();
+ assert.equal(d.getElementById('login-password-row').hidden,false);assert.equal(d.getElementById('login-by-code').hidden,false);
+ assert.equal(d.getElementById('login-submit-label').textContent,'Войти');
+ d.getElementById('login-consent').checked=true;d.getElementById('login-email').value='u@example.com';
+ d.getElementById('login-password').value='wrong pass';submit('login-email-form');await tick();
+ assert.equal(d.getElementById('login-email-error').textContent,'Неверная почта или пароль.');
+ d.getElementById('login-password').value='correct horse';submit('login-email-form');await tick();
+ assert.equal(d.getElementById('login-dialog').open,false);assert.equal(d.getElementById('account-name').textContent,'u@example.com');
+ assert.ok(!calls.some(c=>c[0]==='/auth/request'),'при входе по паролю письмо не запрашивается');
+ // Выход и вход по коду: предлагается задать пароль, без демо-кода на экране.
+ d.getElementById('account-action').click();await tick();d.getElementById('account-action').click();
+ d.getElementById('login-email').value='u@example.com';d.getElementById('login-by-code').click();await tick();
+ assert.equal(d.getElementById('login-code-form').hidden,false);assert.equal(d.querySelector('.demo-code'),null);
+ assert.match(d.getElementById('login-code-hint').textContent,/Спам/);
+ d.getElementById('login-code').value='123456';submit('login-code-form');await tick();
+ assert.equal(d.getElementById('login-password-form').hidden,false);assert.equal(d.getElementById('login-dialog').open,true);
+ d.getElementById('new-password').value='short';submit('login-password-form');await tick();
+ assert.match(d.getElementById('set-password-error').textContent,/от 8/);
+ d.getElementById('new-password').value='new secure pass';submit('login-password-form');await tick();
+ assert.equal(d.getElementById('login-dialog').open,false);
+ assert.deepEqual(calls.filter(c=>c[0]==='/auth/set-password').pop()[1],{password:'new secure pass'});
+ assert.match(d.getElementById('save-note').textContent,/Пароль сохранен/);
+ dom.window.close();
+});
+test('demo mode hides the password field and skips the set-password step',async()=>{
+ const dom=await setup(path=>path==='/settings'?settings:path==='/me'?{email:null,mail_enabled:true,demo:true,password_enabled:false}:path==='/auth/request'?{sent:true,demo_code:'111222'}:path==='/auth/verify'?{email:'u@example.com',has_password:false}:{});
+ const d=dom.window.document,w=dom.window;
+ d.getElementById('account-action').click();
+ assert.equal(d.getElementById('login-password-row').hidden,true);assert.equal(d.getElementById('login-submit-label').textContent,'Получить код');
+ d.getElementById('login-consent').checked=true;d.getElementById('login-email').value='u@example.com';
+ d.getElementById('login-email-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ d.getElementById('login-code').value='111222';d.getElementById('login-code-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(d.getElementById('login-dialog').open,false);assert.equal(d.getElementById('login-password-form').hidden,true);
+ dom.window.close();
+});

@@ -21,6 +21,8 @@ CODE_TTL = 10 * 60
 RESEND_AFTER = 60
 MAX_ATTEMPTS = 5
 SESSION_TTL = 30 * 24 * 3600
+PASSWORD_MIN = 8
+LOCK_TIME = 15 * 60
 
 
 class AuthError(ValueError):
@@ -48,6 +50,11 @@ class Mailer:
     @property
     def enabled(self):
         return bool(self.host and self.sender) or self.demo
+
+    @property
+    def delivers(self):
+        """Письма действительно отправляются: только тогда вход доказывает владение адресом."""
+        return bool(self.host and self.sender)
 
     def send_code(self, email, code):
         if not (self.host and self.sender):
@@ -93,6 +100,7 @@ class Accounts:
                 create table if not exists codes(email text primary key, code_hash text, expires real, attempts int, sent real);
                 create table if not exists sessions(token_hash text primary key, email text, expires real);
                 create table if not exists jobs(email text, job_id text, filename text, created real, primary key(email, job_id));
+                create table if not exists users(email text primary key, pw_hash text, fails int default 0, locked_until real default 0, updated real);
             ''')
 
     @contextmanager
@@ -148,10 +156,79 @@ class Accounts:
             # Код одноразовый: если его уже использовали параллельно, удаления не будет.
             if not db.execute('delete from codes where email=? and code_hash=?', (email, row['code_hash'])).rowcount:
                 raise AuthError('Код устарел. Запросите новый.')
-            token = secrets.token_urlsafe(32)
-            db.execute('insert into sessions values(?,?,?)', (self.digest(token), email, now + SESSION_TTL))
-            db.execute('delete from sessions where expires<?', (now,))
+            # Вход по коду из письма снимает блокировку пароля: владение почтой подтверждено.
+            db.execute('update users set fails=0, locked_until=0 where email=?', (email,))
+            token = self._new_session(db, email, now)
         return email, token
+
+    def _new_session(self, db, email, now):
+        token = secrets.token_urlsafe(32)
+        db.execute('insert into sessions values(?,?,?)', (self.digest(token), email, now + SESSION_TTL))
+        db.execute('delete from sessions where expires<?', (now,))
+        return token
+
+    @staticmethod
+    def _hash_password(password, salt=None):
+        salt = salt or secrets.token_bytes(16)
+        key = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+        return f'scrypt$16384$8$1${salt.hex()}${key.hex()}'
+
+    @staticmethod
+    def _check_password(password, stored):
+        try:
+            _, n, r, p, salt, key = stored.split('$')
+            actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p), dklen=len(key) // 2)
+        except (ValueError, AttributeError):
+            return False
+        return hmac.compare_digest(actual.hex(), key)
+
+    def has_password(self, email):
+        with self.db() as db:
+            row = db.execute('select pw_hash from users where email=?', (email,)).fetchone()
+        return bool(row and row['pw_hash'])
+
+    def set_password(self, email, password, keep_token=None):
+        """Задает или меняет пароль. Остальные сессии пользователя завершаются."""
+        if not self.mailer.delivers:
+            raise AuthError('Пароль можно задать после подключения почты на сервере.')
+        password = password or ''
+        if len(password) < PASSWORD_MIN or len(password) > 128:
+            raise AuthError(f'Пароль должен быть длиной от {PASSWORD_MIN} до 128 символов.')
+        if password.strip() != password or password.lower() == email.lower():
+            raise AuthError('Пароль не должен совпадать с почтой и начинаться или заканчиваться пробелом.')
+        pw_hash, now = self._hash_password(password), self.clock()
+        with self.lock, self.db() as db:
+            db.execute('insert into users(email, pw_hash, fails, locked_until, updated) values(?,?,0,0,?) '
+                'on conflict(email) do update set pw_hash=excluded.pw_hash, fails=0, locked_until=0, updated=excluded.updated',
+                (email, pw_hash, now))
+            db.execute('delete from sessions where email=? and token_hash<>?', (email, self.digest(keep_token or '')))
+
+    def login_password(self, email, password):
+        if not self.mailer.delivers:
+            raise AuthError('Вход по паролю станет доступен после подключения почты.')
+        email = normalize_email(email)
+        now = self.clock()
+        with self.db() as db:
+            row = db.execute('select * from users where email=?', (email,)).fetchone()
+        if row and row['locked_until'] > now:
+            raise AuthError('Слишком много попыток. Войдите по коду из письма или повторите через 15 минут.')
+        # Хеш считается и для несуществующего адреса, чтобы по времени ответа нельзя было узнать о регистрации.
+        ok = self._check_password(password or '', row['pw_hash'] if row and row['pw_hash'] else self._hash_password('x'))
+        if not (row and row['pw_hash'] and ok):
+            if row:
+                with self.lock, self.db() as db:
+                    fails = row['fails'] + 1
+                    db.execute('update users set fails=?, locked_until=? where email=?',
+                        (0 if fails >= MAX_ATTEMPTS else fails, now + LOCK_TIME if fails >= MAX_ATTEMPTS else 0, email))
+            raise AuthError('Неверная почта или пароль.')
+        with self.lock, self.db() as db:
+            db.execute('update users set fails=0, locked_until=0 where email=?', (email,))
+            token = self._new_session(db, email, now)
+        return email, token
+
+    def has_job(self, email, job_id):
+        with self.db() as db:
+            return db.execute('select 1 from jobs where email=? and job_id=?', (email, job_id)).fetchone() is not None
 
     def user(self, token):
         if not token or len(token) > 100:

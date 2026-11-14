@@ -108,9 +108,16 @@ def create_app(data_dir=None):
         return accounts.user(request.cookies.get('tz_user', ''))
 
     def owns(request, job_id):
-        # Публичный режим: задание доступно только браузеру, который его создал.
+        # Публичный режим: задание доступно браузеру, который его создал. Сохраненные
+        # проверки открываются и с других устройств, но только при настоящей отправке
+        # писем: в демо-режиме войти можно под любым адресом.
         marker = service.root / job_id / '.owner'
-        return marker.is_file() and hmac.compare_digest(marker.read_text(), getattr(request.state, 'owner', ''))
+        if marker.is_file() and hmac.compare_digest(marker.read_text(), getattr(request.state, 'owner', '')):
+            return True
+        if not accounts.mailer.delivers:
+            return False
+        email = current_user(request)
+        return bool(email) and accounts.has_job(email, job_id)
 
     def public_quota(kind):
         if not anonymous:
@@ -226,10 +233,45 @@ def create_app(data_dir=None):
         job_id: str = Field(pattern=r'^[a-f0-9]{32}$')
         filename: str = Field(default='', max_length=300)
 
+    class PasswordLogin(Strict):
+        email: str = Field(min_length=3, max_length=254)
+        password: str = Field(min_length=1, max_length=128)
+
+    class NewPassword(Strict):
+        password: str = Field(min_length=1, max_length=128)
+
+    def login_response(email, token):
+        response = JSONResponse({'email': email, 'has_password': accounts.has_password(email)})
+        response.set_cookie('tz_user', token, httponly=True, samesite='lax', secure=secure_cookie, max_age=SESSION_TTL)
+        return response
+
     @app.get('/me', dependencies=[Depends(authorize)])
     def me(request: Request):
-        return {'email': current_user(request), 'mail_enabled': accounts.mailer.enabled,
-            'demo': accounts.mailer.demo and not accounts.mailer.host}
+        email = current_user(request)
+        return {'email': email, 'mail_enabled': accounts.mailer.enabled,
+            'demo': accounts.mailer.demo and not accounts.mailer.host,
+            'password_enabled': accounts.mailer.delivers,
+            'has_password': bool(email) and accounts.has_password(email)}
+
+    @app.post('/auth/password', dependencies=[Depends(authorize)])
+    async def auth_password(body: PasswordLogin):
+        public_quota('login')
+        try:
+            email, token = await run_in_threadpool(accounts.login_password, body.email, body.password)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return login_response(email, token)
+
+    @app.post('/auth/set-password', dependencies=[Depends(authorize)])
+    async def auth_set_password(request: Request, body: NewPassword):
+        email = current_user(request)
+        if not email:
+            raise HTTPException(401, 'Войдите по коду из письма, чтобы задать пароль.')
+        try:
+            await run_in_threadpool(accounts.set_password, email, body.password, request.cookies.get('tz_user', ''))
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {'email': email, 'has_password': True}
 
     @app.post('/auth/request', dependencies=[Depends(authorize)])
     async def auth_request(body: EmailBody):
@@ -246,9 +288,7 @@ def create_app(data_dir=None):
             email, token = await run_in_threadpool(accounts.verify, body.email, body.code)
         except AuthError as exc:
             raise HTTPException(400, str(exc)) from None
-        response = JSONResponse({'email': email})
-        response.set_cookie('tz_user', token, httponly=True, samesite='lax', secure=secure_cookie, max_age=SESSION_TTL)
-        return response
+        return login_response(email, token)
 
     @app.post('/auth/logout', dependencies=[Depends(authorize)])
     def auth_logout(request: Request):

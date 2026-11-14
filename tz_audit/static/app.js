@@ -80,20 +80,47 @@ function renderAccount(){
 }
 async function attachJob(id){if(!me.email||!id)return;try{await post('/my/jobs',{job_id:id,filename:filename||'Документ.docx'});}catch{}}
 let loginEmail='';
-function openLogin(){$('login-email-form').hidden=false;$('login-code-form').hidden=true;$('login-email-error').textContent='';$('login-code-error').textContent='';$('login-dialog').showModal();setTimeout(()=>$('login-email').focus(),50);}
-$('account-action').onclick=async()=>{if(!me.email)return openLogin();try{await post('/auth/logout',{});}catch{}me.email=null;renderAccount();if(!$('history-view').hidden)renderHistory();};
-$('login-email-form').onsubmit=async e=>{e.preventDefault();if(!$('login-consent').checked){$('login-email-error').textContent='Отметьте согласие на обработку адреса почты.';return;}const b=e.target.querySelector('button[type=submit]');b.disabled=true;$('login-email-error').textContent='';
- try{loginEmail=$('login-email').value.trim();const r=await post('/auth/request',{email:loginEmail});$('login-email-form').hidden=true;$('login-code-form').hidden=false;
-  $('login-code-hint').textContent='Мы отправили 6 цифр на '+loginEmail+'. Код действует 10 минут.';$('login-code').value='';
+function loginStep(name){for(const f of ['login-email-form','login-code-form','login-password-form'])$(f).hidden=f!==name;}
+function openLogin(){
+ const pw=!!me.password_enabled;
+ $('login-password-row').hidden=!pw;$('login-by-code').hidden=!pw;$('login-password').value='';
+ $('login-submit-label').textContent=pw?'Войти':'Получить код';
+ for(const id of ['login-email-error','login-code-error','set-password-error'])$(id).textContent='';
+ loginStep('login-email-form');$('login-dialog').showModal();setTimeout(()=>$('login-email').focus(),50);
+}
+function loginConsentOk(){if($('login-consent').checked)return true;$('login-email-error').textContent='Отметьте согласие на обработку адреса почты.';return false;}
+async function loggedIn(r,viaCode){
+ me.email=r.email;me.has_password=!!r.has_password;
+ if(job){await attachJob(job.job_id);}renderAccount();if(!$('history-view').hidden)renderHistory();
+ // После входа по коду предлагаем задать пароль (или новый, если старый забыт).
+ if(viaCode&&me.password_enabled){$('set-password-title').textContent=me.has_password?'Задайте новый пароль':'Придумайте пароль';$('set-password-user').value=r.email;$('new-password').value='';loginStep('login-password-form');setTimeout(()=>$('new-password').focus(),50);}
+ else $('login-dialog').close();
+}
+async function requestCode(){
+ const b=$('login-submit');b.disabled=true;$('login-email-error').textContent='';
+ try{loginEmail=$('login-email').value.trim();const r=await post('/auth/request',{email:loginEmail});loginStep('login-code-form');
+  $('login-code-hint').textContent='Мы отправили 6 цифр на '+loginEmail+'. Код действует 10 минут. Если письма нет, проверьте папку «Спам».';$('login-code').value='';
   const old=document.querySelector('.demo-code');old?.remove();if(r.demo_code){const d=el('div','demo-code','Демо-режим, письмо не отправлялось. Ваш код: '+r.demo_code);$('login-code-hint').after(d);}
   setTimeout(()=>$('login-code').focus(),50);}
+ catch(err){$('login-email-error').textContent=err.message;}finally{b.disabled=false;}
+}
+$('account-action').onclick=async()=>{if(!me.email)return openLogin();try{await post('/auth/logout',{});}catch{}me.email=null;me.has_password=false;renderAccount();if(!$('history-view').hidden)renderHistory();};
+$('login-email-form').onsubmit=async e=>{e.preventDefault();if(!loginConsentOk())return;
+ const password=$('login-password').value;
+ if(!me.password_enabled||!password)return requestCode();
+ const b=$('login-submit');b.disabled=true;$('login-email-error').textContent='';
+ try{loginEmail=$('login-email').value.trim();await loggedIn(await post('/auth/password',{email:loginEmail,password}),false);}
  catch(err){$('login-email-error').textContent=err.message;}finally{b.disabled=false;}};
-$('login-back').onclick=()=>{$('login-email-form').hidden=false;$('login-code-form').hidden=true;};
+$('login-by-code').onclick=()=>{if(loginConsentOk())requestCode();};
+$('login-back').onclick=()=>loginStep('login-email-form');
 $('login-code').oninput=()=>{const v=$('login-code').value.replace(/\D/g,'').slice(0,6);$('login-code').value=v;if(v.length===6)$('login-code-form').requestSubmit();};
 $('login-code-form').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button[type=submit]');b.disabled=true;$('login-code-error').textContent='';
- try{const r=await post('/auth/verify',{email:loginEmail,code:$('login-code').value});me.email=r.email;$('login-dialog').close();
-  if(job){await attachJob(job.job_id);}renderAccount();if(!$('history-view').hidden)renderHistory();}
+ try{await loggedIn(await post('/auth/verify',{email:loginEmail,code:$('login-code').value}),true);}
  catch(err){$('login-code-error').textContent=err.message;}finally{b.disabled=false;}};
+$('login-password-form').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button[type=submit]');b.disabled=true;$('set-password-error').textContent='';
+ try{const r=await post('/auth/set-password',{password:$('new-password').value});me.has_password=r.has_password;$('login-dialog').close();noteHTML($('save-note'),'check','Пароль сохранен. В следующий раз входите по почте и паролю.',null,true);}
+ catch(err){$('set-password-error').textContent=err.message;}finally{b.disabled=false;}};
+$('set-password-skip').onclick=()=>$('login-dialog').close();
 
 /* мои проверки */
 $('nav-history').onclick=()=>{if(busy)return;history.replaceState(null,'','/');view('history',-1);renderHistory();};

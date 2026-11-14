@@ -5,14 +5,14 @@ let lastEvent = 0, ticker = null, factTimer = null, progress = {stage: 0, pct: 0
 const selectedChanges = new Set();
 const blockInfo = new Map();
 
-const coverageLabels = {object:'Предмет и заголовки',numbers:'Числа и размеры',scope:'Комплектность',warranty_acceptance:'Гарантия и приемка',classification:'Коды ОКПД 2',standards:'Стандарты и ГОСТ',language:'Опечатки и грамматика'};
+const coverageLabels = {object:'Предмет и заголовки',numbers:'Числа и размеры',scope:'Комплектность',warranty_acceptance:'Гарантия и приемка',classification:'Коды ОКПД 2',standards:'Стандарты и ГОСТ',language:'Опечатки и грамматика',competition:'Конкуренция и эквиваленты',regime:'Закон, СМП, нацрежим'};
 const categories = {contradiction:'Противоречие',competition:'Ограничение конкуренции',characteristics:'Характеристики',classification:'Код ОКПД 2',warranty:'Гарантия',standards:'Стандарты',completeness:'Комплектность',acceptance:'Приемка',other:'Прочее'};
 const severity = {high:'Высокий',medium:'Средний',low:'Низкий'};
 const STAGES = [
  ['Подготовка пакета','обезличенный текст и правила отправки'],
  ['Анализ документа','модель читает требования и таблицы'],
  ['Нормативные источники','поиск оснований на официальных сайтах'],
- ['Перепроверка','второй проход по семи темам'],
+ ['Перепроверка','второй проход по девяти темам'],
  ['Проверка цитат','каждая цитата сверяется с текстом ТЗ'],
  ['Сборка документа','правки в Word и отчет'],
 ];
@@ -147,6 +147,11 @@ async function renderHistory(){
 function reset(){if(busy)return;resetLoadingView();history.replaceState(null,'','/');job=null;report=null;$('result-save-note').replaceChildren();filename='';$('file-input').value='';$('privacy-approved').checked=false;$('preview-search').value='';alertMessage();view('upload',0);updateReady();}
 $('new-document').onclick=reset;$('replace-file').onclick=reset;$('nav-documents').onclick=reset;
 $('privacy-approved').onchange=updateReady;
+const REGIME_IDS={law:'regime-law',smp:'regime-smp',national_regime:'regime-national'};
+for(const [k,id] of Object.entries(REGIME_IDS)){const v=store.get('tz-regime-'+k);if(v&&[...$(id).options].some(o=>o.value===v))$(id).value=v;$(id).onchange=()=>store.set('tz-regime-'+k,$(id).value);}
+function procurement(){const r={};for(const [k,id] of Object.entries(REGIME_IDS))r[k]=$(id).value;return r;}
+const REGIME_TEXT={law:{'44-ФЗ':'44-ФЗ','223-ФЗ':'223-ФЗ',unknown:'закон не указан'},smp:{yes:'только СМП',no:'без ограничения для СМП',unknown:'СМП не указано'},national_regime:{yes:'нацрежим применяется',no:'нацрежим не применяется',unknown:'нацрежим определен сервисом'}};
+function regimeLine(p){if(!p)return '';return 'Режим проверки: '+Object.keys(REGIME_TEXT).map(k=>REGIME_TEXT[k][p[k]]||'').filter(Boolean).join(', ')+'.';}
 $('start-check').onclick=()=>{
  // Без согласия сначала ведем к галочке, иначе сразу к блоку загрузки.
  const target=$('terms-consent').checked?$('dropzone'):$('terms-consent').closest('.legal-card');
@@ -286,7 +291,7 @@ function describe(m){
  if(/Читаем и обезличиваем источник/.test(m)){counters.sources++;return ['Читаем найденный источник','Берем только выдержки, которые подтверждают замечание'];}
  if(/выдержк/i.test(m))return ['Сверяем выдержку из поиска','Страница источника недоступна, используем выдержку с пометкой'];
  if(/Проверяем цитаты и предложенные правки/.test(m)){counters.checks++;return ['Проверяем черновик замечаний','Каждая цитата сверяется с исходным текстом ТЗ'];}
- if(/Первый проход завершён/.test(m))return ['Первый проход завершен','Перепроверяем документ по семи темам в свежем контексте'];
+ if(/Первый проход завершён/.test(m))return ['Первый проход завершен','Перепроверяем документ по девяти темам в свежем контексте'];
  if(/прошёл проверку цитат/.test(m)){counters.checks++;return ['Замечания подтверждены','Цитаты совпадают с текстом документа'];}
  if(/Ответ требует уточнения|слишком много операций/.test(m))return ['Агент уточняет ответ','Часть замечаний не прошла проверку и отправлена на доработку'];
  if(/HTTP 429/.test(m))return ['Модель перегружена','Повторяем запрос через несколько секунд'];
@@ -368,7 +373,7 @@ async function run(mode){
  beginAnalysisView(mode==='offline'?'Локальная проверка без модели':'Агент проверяет документ',mode);
  let submitted=false,disconnected=false;
  try{
-  await post('/jobs/'+job.job_id+'/run',{mode,approved_digest:job.release_digest,web_enabled:$('web-enabled').checked});
+  await post('/jobs/'+job.job_id+'/run',{mode,approved_digest:job.release_digest,web_enabled:$('web-enabled').checked,procurement:procurement()});
   submitted=true;history.replaceState(null,'','?job='+job.job_id);$('cancel-button').disabled=false;
   await monitor();
  }catch(e){if(submitted){disconnected=true;lostConnection(e);}else{stopLive();view('preview',1);alertMessage(e.message);}}
@@ -389,7 +394,7 @@ function renderResult(){
  countUp($('stat-findings'),f.length);countUp($('stat-high'),f.filter(x=>x.severity==='high').length);countUp($('stat-edits'),report.stats?.applied_edits||0);
  countUp($('stat-review'),new Set([...f.flatMap((x,i)=>x.status==='needs_review'?[i+1]:[]),...(report.changes||[]).filter(c=>c.status==='skipped').map(c=>c.finding)]).size);
  $('download-description').textContent=report.stats?.applied_edits?'Правки в ТЗ выделены желтым и записаны исправлениями Word: их можно принять или отклонить.':'Автоматических правок нет: скачивается копия исходника, все замечания в отчете.';
- $('result-summary').textContent=report.review.summary;downloadLinks();
+ $('result-summary').textContent=report.review.summary;$('result-regime').textContent=regimeLine(report.stats?.procurement);$('result-regime').hidden=!report.stats?.procurement;downloadLinks();
  selectedChanges.clear();activeTab='findings';activeFilter='all';renderTab();renderAccount();
 }
 for(const b of document.querySelectorAll('[data-tab]'))b.onclick=()=>{activeTab=b.dataset.tab;activeFilter='all';renderTab();};

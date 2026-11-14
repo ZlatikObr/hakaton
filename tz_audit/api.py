@@ -22,7 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import Field
 from .agent import AgentConfig, OpenRouter
 from .document import MAX_FILE, DocumentError
-from .models import Strict
+from .models import Strict, Procurement
 from .network import NetworkError
 from .privacy import PrivacyError, check_release, release_digest, privacy_profiles
 from .service import Service, JobError
@@ -398,6 +398,7 @@ def create_app(data_dir=None):
         approved_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
         model: str | None = Field(default=None, max_length=100)
         web_enabled: bool = True
+        procurement: Procurement = Field(default_factory=Procurement)
 
     class Redaction(Strict):
         block_id: str = Field(pattern=r'^b[0-9]{4,6}$')
@@ -456,6 +457,7 @@ def create_app(data_dir=None):
                 started = time.monotonic()
                 config = AgentConfig.from_env()
                 config.model, config.web_enabled = model, body.web_enabled
+                config.procurement = body.procurement.model_dump()
                 service.analyze(job_id, body.mode, body.approved_digest,
                     client=OpenRouter(key) if body.mode == 'openrouter' else None, config=config, control=control)
                 try:

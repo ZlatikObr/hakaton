@@ -142,6 +142,8 @@ class Service:
                 client = client or OpenRouter(os.getenv('OPENROUTER_API_KEY', ''))
                 review, sources, stats = Agent(client, config).run(public, redactor, approved_digest, control=control)
                 model = config.model
+                if getattr(config, 'procurement', None):
+                    stats['procurement'] = dict(config.procurement)
             # Local restoration ONLY in document anchors. Model-generated prose and external sources stay redacted.
             restored = review.model_copy(deep=True)
             original_by_id = {b.id: b for b in original.blocks}

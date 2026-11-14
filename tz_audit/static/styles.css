@@ -487,3 +487,8 @@ body.legal-page{display:block;background:var(--bg)}
 .brand-text b{font-size:25px;font-weight:900;letter-spacing:.03em;color:var(--navy)}
 .brand-text small{align-self:flex-end;margin-top:3px;font-size:13px;font-weight:800;letter-spacing:.12em;color:var(--blue)}
 @media (max-width:760px){.brand-icon{width:30px;height:30px}.brand-text b{font-size:17px}.brand-text small{font-size:10px;margin-top:2px}.brand{gap:6px}}
+.regime-card b{display:block;font-size:15px}
+.regime-card p{margin:4px 0 0}
+.regime-card .field-label{margin:12px 0 5px}
+.regime-card select{height:42px}
+.regime-line{color:var(--link);font-weight:700}

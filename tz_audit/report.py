@@ -49,7 +49,7 @@ def render_report(report, original):
     doc.add_paragraph(f'Применено правок в копии ТЗ: {report.stats.get("applied_edits", 0)}. Предложено: {report.stats.get("proposed_edits", 0)}.')
     if report.review.coverage:
         doc.add_heading('Повторная проверка полноты', 1)
-        labels = {'object':'Предмет и заголовки','numbers':'Числа и размеры','scope':'Комплектность и спецификация','warranty_acceptance':'Гарантия и приёмка','classification':'Коды товаров и работ','standards':'Нормативные ссылки','language':'Опечатки и грамматика'}
+        labels = {'object':'Предмет и заголовки','numbers':'Числа и размеры','scope':'Комплектность и спецификация','warranty_acceptance':'Гарантия и приёмка','classification':'Коды товаров и работ','standards':'Нормативные ссылки','language':'Опечатки и грамматика','competition':'Конкуренция и эквиваленты','regime':'Режим закупки: закон, СМП, нацрежим'}
         for check in report.review.coverage:
             state = {'checked':'Проверено по указанным данным','unverified':'Не хватает подтверждения','not_applicable':'Не относится к документу'}[check.result]
             doc.add_paragraph(f'{labels[check.topic]} — {state}. {check.note} Блоки: {", ".join(check.block_ids) or "—"}.')

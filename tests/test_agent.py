@@ -144,7 +144,7 @@ def test_first_draft_is_not_a_final_report(public_doc, review):
 def test_final_requires_full_coverage(public_doc, review):
     fake=Fake([reply('submit_review',review.model_dump()),reply('submit_review',review.model_dump()),audited(review)])
     _,_,stats=Agent(fake).run(public_doc,Redactor(False),release_digest(public_doc))
-    assert stats['steps']==3 and 'всех 7 тем' in fake.calls[2][-1]['content']
+    assert stats['steps']==3 and 'всех 9 тем' in fake.calls[2][-1]['content']
 
 
 def test_second_pass_has_full_source_but_no_invented_pii(public_doc, review):

@@ -47,7 +47,7 @@ def validate_review(review: Review, document, sources, *, require_coverage=False
     blocks = {b.id: b for b in document.blocks}
     known = {s.id: s for s in sources}
     if require_coverage and {x.topic for x in review.coverage} != set(COVERAGE_TOPICS):
-        raise EvidenceError('Второй проход должен заполнить coverage для всех 7 тем: ' + ', '.join(COVERAGE_TOPICS))
+        raise EvidenceError(f'Второй проход должен заполнить coverage для всех {len(COVERAGE_TOPICS)} тем: ' + ', '.join(COVERAGE_TOPICS))
     if len({x.topic for x in review.coverage}) != len(review.coverage):
         raise EvidenceError('Темы coverage не должны повторяться.')
     for check in review.coverage:

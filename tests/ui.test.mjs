@@ -237,7 +237,7 @@ test('progress grows evenly by time and the live feed describes real events',asy
  assert.equal(d.getElementById('count-steps').textContent,'3');assert.equal(d.getElementById('count-sources').textContent,'2');
  const feed=[...d.querySelectorAll('#feed li b')].map(b=>b.textContent);
  assert.deepEqual(feed,['Первый проход завершен','Ищем нормативные основания','Модель читает документ','Документ передан агенту']);
- assert.equal(d.querySelectorAll('#topics .chip.on').length,7);
+ assert.equal(d.querySelectorAll('#topics .chip.on').length,9);
  w.app.stopLive();dom.window.close();
 });
 
@@ -339,4 +339,29 @@ test('a short network drop during a check is retried instead of losing the conne
  assert.equal(calls,2);assert.equal(d.getElementById('result-view').hidden,false);
  assert.equal(d.getElementById('reconnect-button').hidden,true);
  dom.window.close();
+});
+
+test('procurement regime is sent with the run, remembered and shown on the result',async()=>{
+ const id='a'.repeat(32);let sent;
+ const handler=(path,options)=>{
+  if(path==='/settings')return settings;
+  if(path.endsWith('/run')){sent=JSON.parse(options.body);return {status:'queued'};}
+  if(path.endsWith('/status'))return {status:'complete',events:[]};
+  if(path.endsWith('report.json'))return {mode:'openrouter',stats:{applied_edits:0,procurement:sent.procurement},review:{summary:'ok',findings:[],coverage:[{topic:'competition',result:'checked',note:'Проверены знаки и эквиваленты',block_ids:['b0001']},{topic:'regime',result:'unverified',note:'Нацрежим требует проверки',block_ids:[]}]},changes:[],sources:[]};
+  return {};
+ };
+ let dom=await setup(handler);let d=dom.window.document,w=dom.window;
+ assert.equal(d.getElementById('regime-law').value,'unknown');
+ d.getElementById('regime-law').value='44-ФЗ';d.getElementById('regime-law').dispatchEvent(new w.Event('change'));
+ d.getElementById('regime-smp').value='yes';d.getElementById('regime-smp').dispatchEvent(new w.Event('change'));
+ w.testUI.preview({job_id:id,release_digest:'b'.repeat(64),blocks:0,redactions:{},public:{blocks:[]}});
+ await w.testUI.run('openrouter');
+ assert.deepEqual(sent.procurement,{law:'44-ФЗ',smp:'yes',national_regime:'unknown'});
+ assert.equal(d.getElementById('result-regime').hidden,false);
+ assert.equal(d.getElementById('result-regime').textContent,'Режим проверки: 44-ФЗ, только СМП, нацрежим определен сервисом.');
+ d.querySelector('[data-tab="coverage"]').click();
+ assert.match(d.getElementById('result-content').textContent,/Конкуренция и эквиваленты/);
+ assert.match(d.getElementById('result-content').textContent,/Закон, СМП, нацрежим/);
+ const saved=w.localStorage.getItem('tz-regime-law');dom.window.close();
+ assert.equal(saved,'44-ФЗ');
 });

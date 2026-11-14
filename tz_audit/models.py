@@ -49,10 +49,10 @@ class Finding(Strict):
     edits: list[Edit] = Field(default_factory=list, max_length=6)
     row_insertions: list[RowInsertion] = Field(default_factory=list, max_length=3)
 
-COVERAGE_TOPICS = ('object', 'numbers', 'scope', 'warranty_acceptance', 'classification', 'standards', 'language')
+COVERAGE_TOPICS = ('object', 'numbers', 'scope', 'warranty_acceptance', 'classification', 'standards', 'language', 'competition', 'regime')
 
 class Coverage(Strict):
-    topic: Literal['object', 'numbers', 'scope', 'warranty_acceptance', 'classification', 'standards', 'language']
+    topic: Literal['object', 'numbers', 'scope', 'warranty_acceptance', 'classification', 'standards', 'language', 'competition', 'regime']
     block_ids: list[str] = Field(max_length=30)
     result: Literal['checked', 'not_applicable', 'unverified']
     note: str = Field(min_length=10, max_length=800)
@@ -60,7 +60,24 @@ class Coverage(Strict):
 class Review(Strict):
     summary: str = Field(min_length=10, max_length=4000)
     findings: list[Finding] = Field(max_length=80)
-    coverage: list[Coverage] = Field(default_factory=list, max_length=7)
+    coverage: list[Coverage] = Field(default_factory=list, max_length=9)
+
+class Procurement(Strict):
+    """Режим закупки, который задает пользователь перед проверкой."""
+    law: Literal['44-ФЗ', '223-ФЗ', 'unknown'] = 'unknown'
+    smp: Literal['yes', 'no', 'unknown'] = 'unknown'
+    national_regime: Literal['yes', 'no', 'unknown'] = 'unknown'
+
+    def describe(self):
+        law = {'44-ФЗ': 'Закупка по 44-ФЗ.', '223-ФЗ': 'Закупка по 223-ФЗ и положению о закупке заказчика.',
+               'unknown': 'Закон не указан пользователем.'}[self.law]
+        smp = {'yes': 'Закупка только у субъектов малого и среднего предпринимательства (СМП).',
+               'no': 'Закупка не ограничена участием СМП.', 'unknown': 'Ограничение для СМП не указано.'}[self.smp]
+        regime = {'yes': 'Пользователь указал, что применяется национальный режим.',
+                  'no': 'Пользователь указал, что национальный режим не применяется.',
+                  'unknown': 'Применимость национального режима не указана: определи по предмету и кодам как needs_review.'}[self.national_regime]
+        return ' '.join((law, smp, regime))
+
 
 class Source(Strict):
     id: str

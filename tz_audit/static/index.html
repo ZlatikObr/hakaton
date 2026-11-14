@@ -147,6 +147,16 @@
       <div class="side-badge" id="privacy-profile-label">Обработано локально</div>
       <p class="muted">Скрытые данные отмечены так: <span class="private-token">скрыто</span></p>
      </div>
+     <div class="card side-card regime-card">
+      <b>Режим закупки</b>
+      <p class="muted small-text">Нужен для проверки эквивалентов, СМП и национального режима</p>
+      <label class="field-label" for="regime-law">Закон</label>
+      <select id="regime-law"><option value="unknown">Не знаю</option><option value="44-ФЗ">44-ФЗ</option><option value="223-ФЗ">223-ФЗ</option></select>
+      <label class="field-label" for="regime-smp">Закупка только у СМП</label>
+      <select id="regime-smp"><option value="unknown">Не знаю</option><option value="yes">Да</option><option value="no">Нет</option></select>
+      <label class="field-label" for="regime-national">Национальный режим (ПП № 1875)</label>
+      <select id="regime-national"><option value="unknown">Определите сами</option><option value="yes">Применяется</option><option value="no">Не применяется</option></select>
+     </div>
      <div class="card side-card tip">
       <svg><use href="#i-eye-off"/></svg>
       <div><b>Нужно скрыть что-то еще?</b><p class="muted">Выделите текст мышью прямо в документе. Фрагмент будет скрыт везде, где встречается.</p></div>
@@ -218,7 +228,7 @@
     <div class="stat good"><span>Правок внесено</span><b data-count id="stat-edits">0</b><small>в копию документа</small></div>
     <div class="stat warn"><span>Требуют решения</span><b data-count id="stat-review">0</b><small>не исправлялись автоматически</small></div>
    </div>
-   <div class="card summary-card"><span class="eyebrow">ЗАКЛЮЧЕНИЕ</span><p id="result-summary"></p><small class="muted" id="download-description"></small></div>
+   <div class="card summary-card"><span class="eyebrow">ЗАКЛЮЧЕНИЕ</span><p id="result-summary"></p><small class="regime-line" id="result-regime" hidden></small><small class="muted" id="download-description"></small></div>
    <div class="card results-card">
     <div class="tabs" role="tablist">
      <button class="tab active" data-tab="findings">Замечания</button>

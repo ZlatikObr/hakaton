@@ -135,10 +135,25 @@ def test_search_extra_arguments_rejected(public_doc, review):
     assert 'Аргументы не соответствуют' in fake.calls[1][-1]['content']
 
 
-def test_first_draft_is_not_a_final_report(public_doc, review):
+def test_first_draft_is_returned_only_with_explicit_incomplete_mark(public_doc, review):
     fake=Fake([reply('submit_review',review.model_dump())])
+    result,_,stats=Agent(fake,AgentConfig(max_steps=1)).run(public_doc,Redactor(False),release_digest(public_doc))
+    assert stats['audit_incomplete'] is True and stats['audit_passes']==0
+    assert 'Перепроверка вторым проходом не завершена' in result.summary
+
+
+def test_no_valid_draft_still_fails(public_doc):
+    fake=Fake([reply('search_norms',{'topic':'standards'})])
     with pytest.raises(NetworkError,match='лимит шагов'):
         Agent(fake,AgentConfig(max_steps=1)).run(public_doc,Redactor(False),release_digest(public_doc))
+
+
+def test_local_tool_limit_forces_report(public_doc, review):
+    from tz_audit.agent import LOCAL_TOOL_LIMIT
+    calls=[reply('lookup_okpd2',{'query':'лифт грузовой'}) for _ in range(LOCAL_TOOL_LIMIT)]
+    fake=Fake(calls+[reply('submit_review',review.model_dump()),audited(review)])
+    _,_,stats=Agent(fake).run(public_doc,Redactor(False),release_digest(public_doc))
+    assert stats['audit_passes']==1 and 'отчёт' not in ''
 
 
 def test_final_requires_full_coverage(public_doc, review):

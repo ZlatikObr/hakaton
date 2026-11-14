@@ -88,13 +88,16 @@ regime — соответствие ТЗ режиму из procurement_context: 
 local_checks — локальные сопоставления, а не готовые доказанные ошибки. Проверь каждое по обеим цитатам. Не объявляй одинаковыми разные объекты (например, дверной проём и площадь облицовки); при нехватке данных сохрани вопрос ручной проверки. Для исправления гарантии используй уже названные в документе документы приёмки, но оставляй изменение события гарантии на выбор сотрудника.
 '''
 
+LOCAL_TOOL_LIMIT = 8  # вызовов справочника ОКПД 2 и базы норм на проверку
+
+
 @dataclass
 class AgentConfig:
     model: str = DEFAULT_MODEL
     max_steps: int = 12
     max_output_tokens: int = 12000
     max_input_bytes: int = 500_000
-    max_total_input_bytes: int = 2_000_000
+    max_total_input_bytes: int = 4_000_000
     web_enabled: bool = False
     review_only: bool = False
     reference_ids: tuple[str, ...] = ()
@@ -248,6 +251,7 @@ class Agent:
             'procurement_context': Procurement(**(self.config.procurement or {})).describe(),
         }, ensure_ascii=False)}]
         trace = []
+        first_pass = None
         total_input = 0
         usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'reported_cost_usd': 0.0}
         providers_used = set()
@@ -258,7 +262,8 @@ class Agent:
             # Reserve draft/repair and final/repair calls. The second pass cannot
             # spend its response budget on research; missing evidence stays explicit.
             reserved = min(6, max(3, self.config.max_steps // 2))
-            review_only = audit_pass or step >= max(0, self.config.max_steps - reserved) or len(research.sources) >= 6
+            local_calls = sum(t['tool'] in {'lookup_okpd2', 'read_norm'} for t in trace)
+            review_only = audit_pass or step >= max(0, self.config.max_steps - reserved) or len(research.sources) >= 6 or local_calls >= LOCAL_TOOL_LIMIT
             if review_only and not audit_pass:
                 messages.append({'role': 'user', 'content': 'Бюджет исследования завершён. Сейчас представь полный черновик через submit_review на основе полученных данных. Непроверенные нормы явно отметь; не делай новых поисков.'})
             control.emit(f'Шаг {step+1}/{self.config.max_steps}: проверяем исходящие данные', step=step+1, max_steps=self.config.max_steps)
@@ -363,6 +368,7 @@ class Agent:
                             # Fresh context: complete source document + draft + fetched evidence.
                             # Model-generated prose may invent PII: redact it before replaying.
                             draft = redact_draft(review, redactor)
+                            first_pass = review
                             next_messages = [{'role': 'system', 'content': SYSTEM + '\n' + AUDIT + '\nИнструменты поиска на втором проходе недоступны. Используй только полученные источники и локальный справочник, нехватку подтверждения явно отметь в coverage и выводах.' + reference_note()}, {'role': 'user', 'content': json.dumps({
                                 'document': public_payload(document), 'draft': draft,
                                 'local_checks': [f.model_dump() for f in local_checks],
@@ -383,12 +389,18 @@ class Agent:
                         if review_only: raise EvidenceError('Сейчас доступен только submit_review; поиск завершён.')
                         if set(args) - {'topic', 'reference_id'} or not isinstance(args.get('topic'), str) or (args.get('reference_id') is not None and not isinstance(args['reference_id'], str)):
                             raise ValueError()
-                        result = research.search(**args)
+                        try:
+                            result = research.search(**args)
+                        except NetworkError as exc:
+                            result = {'error': f'Поиск недоступен: {exc} Продолжай без внешнего подтверждения и отметь это.'}
                     elif name == 'fetch_source':
                         if review_only: raise EvidenceError('Сейчас доступен только submit_review; используй уже полученные источники.')
                         if set(args) != {'source_id'} or not isinstance(args['source_id'], str):
                             raise ValueError()
-                        result = evidence_for_model(research.fetch(**args))
+                        try:
+                            result = evidence_for_model(research.fetch(**args))
+                        except NetworkError as exc:
+                            result = {'error': f'Источник недоступен: {exc} Продолжай без него и отметь отсутствие подтверждения.'}
                     elif name == 'read_norm':
                         if review_only: raise EvidenceError('Сейчас доступен только submit_review; используй уже прочитанные нормы.')
                         if set(args) != {'norm_id'} or args.get('norm_id') not in {'44fz_33', '223fz_3_6_1', '223fz_3_1_4', 'gk_724', 'gk_755'}:
@@ -400,7 +412,7 @@ class Agent:
                         query = args.get('query')
                         if set(args) != {'query'} or not isinstance(query, str) or not 3 <= len(query) <= 120:
                             raise ValueError()
-                        codes = okpd.search(query)
+                        codes = okpd.search(query, limit=5)
                         result = {'results': [{'source_id': local_source(code), **okpd.describe(code)} for code in codes],
                                   'note': 'Цитируй source_id; для пустого результата попробуй слова из наименований классификатора.'}
                     else:
@@ -426,4 +438,14 @@ class Agent:
                 except PrivacyError:
                     result_text = json.dumps({'error': 'Текст источника не прошёл локальную проверку. Используй другой источник или отметь отсутствие подтверждения.'}, ensure_ascii=False)
                 messages.append({'role': 'tool', 'tool_call_id': call['id'], 'content': result_text})
+        if first_pass is not None:
+            # Перепроверка не уложилась в лимит: отдаем проверенный первый проход с явной пометкой.
+            retain_unaddressed(first_pass, local_checks)
+            first_pass = validate_review(first_pass, document, research.sources + local_sources)
+            first_pass.summary = (first_pass.summary + ' Перепроверка вторым проходом не завершена: результат первого прохода, проверьте выводы внимательнее.')[:4000]
+            control.emit('Перепроверка не завершена; сохраняем проверенный результат первого прохода')
+            return first_pass, research.sources + local_sources, {'steps': self.config.max_steps, 'audit_passes': 0, 'audit_incomplete': True,
+                'route': route_info(self.config.model), 'providers_used': sorted(providers_used), 'local_checks': len(local_checks), **usage,
+                'input_bytes': total_input, 'trace': trace, 'search_calls': research.calls, 'search_reported_cost_usd': research.reported_cost,
+                'research_failures': getattr(research, 'failures', [])}
         raise NetworkError('Агент исчерпал лимит шагов без валидного отчёта.')

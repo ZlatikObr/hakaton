@@ -216,7 +216,7 @@ def create_app(data_dir=None):
 
     @app.get('/favicon.ico', include_in_schema=False)
     def favicon():
-        return FileResponse(STATIC / 'assets' / 'quantara-mark.png', media_type='image/png')
+        return FileResponse(STATIC / 'assets' / 'favicon-64.png', media_type='image/png')
 
     @app.get('/health')
     def health(): return {'status': 'ok'}

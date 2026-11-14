@@ -232,3 +232,11 @@ def test_one_sided_contradiction_does_not_discard_other_findings(public_doc,revi
 
 def test_short_standard_identifier_is_valid_citation():
     assert Citation(source_id='s1',quote='ГОСТ Р 53782-2010').quote=='ГОСТ Р 53782-2010'
+
+
+def test_provider_call_ids_with_colons_are_accepted(public_doc, review):
+    # AITunnel/Kimi возвращают ID вида «submit_review:0».
+    first = reply('submit_review', review.model_dump()); first['choices'][0]['message']['tool_calls'][0]['id'] = 'submit_review:0'
+    fake = Fake([first, audited(review)])
+    result, _, stats = Agent(fake).run(public_doc, Redactor(False), release_digest(public_doc))
+    assert stats['steps'] == 2 and result.findings

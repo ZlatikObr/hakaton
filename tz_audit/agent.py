@@ -308,7 +308,8 @@ class Agent:
                 if calls:
                     clean_calls = []
                     for call in calls:
-                        if call.get('type') != 'function' or not re.fullmatch(r'[a-zA-Z0-9_-]{1,120}', call['id']):
+                        # ID вызова заменяется локальным ниже; у разных провайдеров формат свой (например, «read_norm:2»).
+                        if call.get('type') != 'function' or not re.fullmatch(r'[a-zA-Z0-9_.:-]{1,120}', str(call.get('id', ''))):
                             raise ValueError()
                         fn = call['function']
                         if not isinstance(fn['name'], str) or not isinstance(fn['arguments'], str):

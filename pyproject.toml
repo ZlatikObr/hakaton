@@ -22,4 +22,4 @@ include = ["tz_audit*"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-tz_audit = ["static/*", "static/assets/*"]
+tz_audit = ["static/*", "static/assets/*", "data/*"]

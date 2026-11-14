@@ -12,6 +12,7 @@ from .privacy import PrivacyError, check_release, public_payload
 from .research import Research, TOPICS
 from .validation import EvidenceError, validate_review
 from .crosschecks import crosschecks, retain_unaddressed
+from .reference import reference
 from .model_profiles import DEFAULT_MODEL, KIMI_PRO, provider_policy, reasoning_policy, route_info
 
 SYSTEM = '''Ты проверяешь техническое задание на закупку на русском языке.
@@ -29,6 +30,10 @@ SYSTEM = '''Ты проверяешь техническое задание на
 - Закон не указан: проверяй требования, общие для обоих законов, и прямо отметь, что режим не задан. Не отказывайся от проверки конкуренции из-за неизвестного режима.
 - СМП = yes: в ТЗ не должно быть требований, несовместимых с закупкой у СМП (крупный опыт, конкретный производитель как условие участия); СМП = no: не должно быть указаний на закупку только у СМП.
 - Национальный режим (ПП РФ от 23.12.2024 № 1875: запреты, ограничения и преимущества): при yes или когда по предмету и ОКПД 2 режим вероятно применим, проверь формулировки о стране происхождения и требования к иностранным товарам без эквивалента; при no не делай замечаний о нацрежиме.
+Справочник ОКПД 2 и ПП № 1875 (раздел «Локальный справочник» ниже) — выписка из официального классификатора Росстата и текста ПП РФ № 1875 на сервере, ей можно доверять:
+- Для каждого кода из документа сравни наименование кода с товаром или работой в той же строке. Если код относится к другому товару или разделу (например, к автотранспорту для лабораторного оборудования), это подтверждённое расхождение: category=classification, status=document_issue, цитата кода и строки, citations на source_id из справочника. Если кода нет в классификаторе, сообщи об этом.
+- Подбирай коды-кандидаты инструментом lookup_okpd2 (поиск по словам классификатора, например «сосуды вакуумные», а не «термос»); предлагай замену кода в edits со ссылкой на источник, решение остаётся за сотрудником.
+- Меры нацрежима бери из справочника: запрет (приложение 1), ограничение (приложение 2), преимущество с минимальной долей (приложение 3). Если по коду есть мера, проверь, не противоречит ли ей ТЗ (требование импортного товара, отказ от требований к стране происхождения), и назови меру в рекомендации со ссылкой на источник.
 Чек-лист конкуренции для каждого товара: есть ли «или эквивалент» у каждого знака, модели и артикула; не переписаны ли характеристики одной конкретной модели (фирменные технологии, уникальные значения, которые даёт только один производитель); заданы ли диапазоны или допуски там, где точное значение не обосновано; нет ли избыточных требований к поставщику.
 Референс с допустимым эквивалентом сам по себе не доказывает ограничение конкуренции.
 Правовые нормы из этих правил известны; ссылаясь на них без прочитанного источника, ставь basis=external и status=needs_review. Конкретные факты из документа (знак без «или эквивалент») — подтверждённые наблюдения: приведи точную цитату и предложи минимальную правку «… или эквивалент».
@@ -114,6 +119,8 @@ TOOLS = [
     tool('fetch_source', 'Прочитать один источник, полученный search_norms.', {
         'type': 'object', 'properties': {'source_id': {'type': 'string'}}, 'required': ['source_id'], 'additionalProperties': False}),
     tool('submit_review', 'Представить окончательный отчёт по схеме.', Review.model_json_schema()),
+    tool('lookup_okpd2', 'Найти коды ОКПД 2 по словам наименования в локальном справочнике (без интернета). Возвращает коды, наименования, группировки и меры ПП № 1875.', {
+        'type': 'object', 'properties': {'query': {'type': 'string', 'minLength': 3, 'maxLength': 120}}, 'required': ['query'], 'additionalProperties': False}),
 ]
 
 
@@ -155,7 +162,9 @@ class OpenRouter:
         self.transport = transport or HTTPS()
 
     def complete(self, messages, config):
-        available_tools = [deepcopy(TOOLS[-1])]
+        available_tools = [deepcopy(TOOLS[2])]
+        if not config.review_only:
+            available_tools.append(deepcopy(TOOLS[3]))
         if config.web_enabled and not config.review_only:
             search = deepcopy(TOOLS[0])
             properties = search['function']['parameters']['properties']
@@ -195,7 +204,27 @@ class Agent:
             backend=os.getenv('TZ_SEARCH_BACKEND', 'openrouter'), openrouter_key=getattr(self.client, 'key', os.getenv('OPENROUTER_API_KEY', '')),
             search_model=os.getenv('TZ_SEARCH_MODEL', 'deepseek/deepseek-v4.1-flash-1017'))
         local_checks = crosschecks(document)
-        messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': json.dumps({
+        okpd = reference()
+        local_sources, local_codes = [], {}
+
+        def local_source(code):
+            # Выписка справочника — серверные данные: источник для цитат и для системного сообщения.
+            if code not in local_codes and len(local_sources) < 80:
+                local_codes[code] = f'k{len(local_sources) + 1}'
+                local_sources.append(okpd.source(code, local_codes[code]))
+            return local_codes.get(code)
+
+        for code in okpd.codes_in(document):
+            local_source(code)
+
+        def reference_note():
+            if not local_sources:
+                return '\nЛокальный справочник: в документе нет кодов ОКПД 2; для подбора используй lookup_okpd2.'
+            rows = [{'source_id': s.id, 'text': s.text} for s in local_sources]
+            return ('\nЛокальный справочник ОКПД 2 (ред. ' + okpd.okpd_version + ') и ПП № 1875 (ред. ' + okpd.pp_version +
+                    '). Коды из документа и найденные кандидаты:\n' + json.dumps(rows, ensure_ascii=False))
+
+        messages = [{'role': 'system', 'content': SYSTEM + reference_note()}, {'role': 'user', 'content': json.dumps({
             'document': public_payload(document), 'normative_references': research.references,
             'local_checks': [f.model_dump() for f in local_checks],
             'internet_enabled': self.config.web_enabled,
@@ -300,9 +329,9 @@ class Agent:
             for call in calls:
                 control.check()
                 name = call['function']['name']
-                labels = {'search_norms': 'Ищем нормативные источники', 'fetch_source': 'Читаем и обезличиваем источник', 'submit_review': 'Проверяем цитаты и предложенные правки'}
+                labels = {'search_norms': 'Ищем нормативные источники', 'fetch_source': 'Читаем и обезличиваем источник', 'submit_review': 'Проверяем цитаты и предложенные правки', 'lookup_okpd2': 'Сверяем коды по справочнику ОКПД 2'}
                 control.emit(labels.get(name, 'Блокируем недоступный инструмент'))
-                trace.append({'step': step+1, 'tool': name if name in {'search_norms','fetch_source','submit_review'} else 'denied'})
+                trace.append({'step': step+1, 'tool': name if name in {'search_norms','fetch_source','submit_review','lookup_okpd2'} else 'denied'})
                 try:
                     args = json.loads(call['function']['arguments'])
                     if not isinstance(args, dict):
@@ -310,13 +339,13 @@ class Agent:
                     if name == 'submit_review':
                         if len(calls) != 1:
                             raise EvidenceError('submit_review должен быть единственным вызовом шага.')
-                        review = validate_review(Review.model_validate(args), document, research.sources, require_coverage=audit_pass)
+                        review = validate_review(Review.model_validate(args), document, research.sources + local_sources, require_coverage=audit_pass)
                         control.check()
                         if not audit_pass:
                             # Fresh context: complete source document + draft + fetched evidence.
                             # Model-generated prose may invent PII: redact it before replaying.
                             draft = redact_draft(review, redactor)
-                            next_messages = [{'role': 'system', 'content': SYSTEM + '\n' + AUDIT + '\nИнструменты поиска на втором проходе недоступны. Используй только полученные источники, нехватку подтверждения явно отметь в coverage и выводах.'}, {'role': 'user', 'content': json.dumps({
+                            next_messages = [{'role': 'system', 'content': SYSTEM + '\n' + AUDIT + '\nИнструменты поиска на втором проходе недоступны. Используй только полученные источники и локальный справочник, нехватку подтверждения явно отметь в coverage и выводах.' + reference_note()}, {'role': 'user', 'content': json.dumps({
                                 'document': public_payload(document), 'draft': draft,
                                 'local_checks': [f.model_dump() for f in local_checks],
                                 'sources': [evidence_for_model(s) for s in research.sources],
@@ -329,9 +358,9 @@ class Agent:
                             control.emit('Первый проход завершён. Перепроверяем полноту по девяти темам', phase='audit')
                             break
                         retained = retain_unaddressed(review, local_checks)
-                        review = validate_review(review, document, research.sources, require_coverage=True)
+                        review = validate_review(review, document, research.sources + local_sources, require_coverage=True)
                         control.emit('Отчёт модели прошёл проверку цитат и правил редактирования')
-                        return review, research.sources, {'steps': step+1, 'audit_passes': 1, 'route': route_info(self.config.model), 'providers_used': sorted(providers_used), 'local_checks': len(local_checks), 'retained_local_checks': retained, **usage, 'input_bytes': total_input, 'trace': trace, 'search_calls': research.calls, 'search_reported_cost_usd': research.reported_cost, 'research_failures': getattr(research, 'failures', [])}
+                        return review, research.sources + local_sources, {'steps': step+1, 'okpd2_codes': len(okpd.codes_in(document)), 'okpd2_lookups': sum(t['tool'] == 'lookup_okpd2' for t in trace), 'audit_passes': 1, 'route': route_info(self.config.model), 'providers_used': sorted(providers_used), 'local_checks': len(local_checks), 'retained_local_checks': retained, **usage, 'input_bytes': total_input, 'trace': trace, 'search_calls': research.calls, 'search_reported_cost_usd': research.reported_cost, 'research_failures': getattr(research, 'failures', [])}
                     elif name == 'search_norms':
                         if review_only: raise EvidenceError('Сейчас доступен только submit_review; поиск завершён.')
                         if set(args) - {'topic', 'reference_id'} or not isinstance(args.get('topic'), str) or (args.get('reference_id') is not None and not isinstance(args['reference_id'], str)):
@@ -342,8 +371,16 @@ class Agent:
                         if set(args) != {'source_id'} or not isinstance(args['source_id'], str):
                             raise ValueError()
                         result = evidence_for_model(research.fetch(**args))
+                    elif name == 'lookup_okpd2':
+                        if review_only: raise EvidenceError('Сейчас доступен только submit_review; используй уже полученный справочник.')
+                        query = args.get('query')
+                        if set(args) != {'query'} or not isinstance(query, str) or not 3 <= len(query) <= 120:
+                            raise ValueError()
+                        codes = okpd.search(query)
+                        result = {'results': [{'source_id': local_source(code), **okpd.describe(code)} for code in codes],
+                                  'note': 'Цитируй source_id; для пустого результата попробуй слова из наименований классификатора.'}
                     else:
-                        result = {'error': 'Инструмент запрещён. Доступны только search_norms, fetch_source, submit_review.'}
+                        result = {'error': 'Инструмент запрещён. Доступны только search_norms, fetch_source, lookup_okpd2, submit_review.'}
                 except (ValueError, TypeError, ValidationError) as exc:
                     # No Pydantic input echo, private content, URLs or provider response in errors.
                     detail = str(exc) if isinstance(exc, (EvidenceError, NetworkError, PrivacyError)) else 'Аргументы не соответствуют схеме. Исправь вызов.'

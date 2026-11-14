@@ -7,3 +7,5 @@
 
 !tz_audit/static/
 !tz_audit/static/*
+!tz_audit/data/
+!tz_audit/data/*

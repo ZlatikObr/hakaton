@@ -365,3 +365,11 @@ test('procurement regime is sent with the run, remembered and shown on the resul
  const saved=w.localStorage.getItem('tz-regime-law');dom.window.close();
  assert.equal(saved,'44-ФЗ');
 });
+
+test('okpd2 lookups appear in the live feed',async()=>{
+ const dom=await setup(()=>settings);const d=dom.window.document,w=dom.window;
+ w.app.setJob({job_id:'a'.repeat(32),estimate_seconds:{openrouter:100,offline:4},public:{blocks:[]}});w.app.beginAnalysisView('t','openrouter');
+ w.testUI.progress({status:'running',events:[{seq:1,time:'2026-11-14T10:00:00Z',message:'Сверяем коды по справочнику ОКПД 2'}]});
+ assert.equal(d.getElementById('now-title').textContent,'Сверяем коды ОКПД 2');assert.equal(d.getElementById('count-sources').textContent,'1');
+ w.app.stopLive();dom.window.close();
+});

@@ -7,6 +7,7 @@ from urllib.parse import urlencode, urlsplit, parse_qs, unquote
 from contextlib import contextmanager
 from .models import Source
 from .network import HTTPS, checked_url, NetworkError
+from .reference import reference
 
 OFFICIAL_HOSTS = frozenset({'pravo.gov.ru', 'publication.pravo.gov.ru', 'www.consultant.ru',
     'docs.eaeunion.org', 'eec.eaeunion.org', 'www.gost.ru', 'protect.gost.ru',
@@ -57,9 +58,15 @@ class Research:
         self.references = {f'n{i+1}': ref for i, ref in enumerate(standards)}
         codes = sorted(set(re.findall(r'\b\d{2}\.\d{2}\.\d{2}\.\d{3}\b', document_text)))[:30]
         self.references.update({f'c{i+1}': 'ОКПД 2 ' + code for i, code in enumerate(codes)})
-        # Only fixed public subject names may enrich the isolated search query.
-        subjects = [(r'\bлифт', 'лифты монтаж'), (r'\bМФУ\b|многофункциональн', 'многофункциональные устройства печати'), (r'\bмикроскоп', 'микроскопы')]
-        self.subjects = [label for pattern, label in subjects if re.search(pattern, document_text, re.I)]
+        # Only public classifier names (ОКПД 2 entries for codes in the document)
+        # may enrich the isolated search query; document text never does.
+        self.subjects = []
+        for code in codes:
+            record = reference().records.get(code)
+            if record:
+                label = ' '.join(re.findall(r'[А-Яа-яЁё]+', record['n'])[:4]).lower()
+                if label and label not in self.subjects:
+                    self.subjects.append(label)
         self.candidates = {}
         self.search_excerpts = {}
         self.search_titles = {}
@@ -226,7 +233,7 @@ def source_excerpt(text, references, limit=18000):
         return text, False
     # Preserve exact text inside excerpts; never synthesize evidence from search snippets.
     terms = [re.escape(re.sub(r'^.*?\s(?=\d)', '', r)) for r in references]
-    terms += [r'ОКПД', r'гаранти', r'лифт', r'приемк', r'приёмк']
+    terms += [r'ОКПД', r'гаранти', r'эквивалент', r'приемк', r'приёмк']
     spans = [(0, 2000)]
     for match in re.finditer('|'.join(terms), text[:300000], re.I):
         left, right = max(0, match.start()-800), min(len(text), match.end()+1800)

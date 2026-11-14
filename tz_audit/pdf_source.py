@@ -28,7 +28,10 @@ def extract_pdf(data, control=None):
 if __name__ == '__main__':
     import io
     import resource
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
+    except (ValueError, OSError):
+        pass  # macOS не дает понизить RLIMIT_AS; в Linux/Docker лимит памяти действует.
     resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
     from pypdf import PdfReader
     raw = sys.stdin.buffer.read(2_000_001)

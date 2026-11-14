@@ -74,6 +74,23 @@ def complex_paragraph(paragraph):
                for run in paragraph.iter(W+'r'))
 
 
+# Порядок дочерних элементов rPr по схеме OOXML: highlight идет перед этими элементами.
+_AFTER_HIGHLIGHT = ('u', 'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath')
+
+
+def highlight(run, color='yellow'):
+    """Выделяет вставленный текст цветом, чтобы правку было видно в любом режиме просмотра Word."""
+    props = run.find(W+'rPr')
+    if props is None:
+        props = ET.Element(W+'rPr')
+        run.insert(0, props)
+    for old in props.findall(W+'highlight'):
+        props.remove(old)
+    mark = ET.Element(W+'highlight', {W+'val': color})
+    position = next((i for i, child in enumerate(props) if child.tag in {W+t for t in _AFTER_HIGHLIGHT}), len(props))
+    props.insert(position, mark)
+
+
 def replace_runs(paragraph, before, after, revision_ids=None, *, checked=False, author='ТЗ Контроль'):
     if not checked and complex_paragraph(paragraph):
         return 'Сложное поле, разрыв или исправление Word требует ручного редактирования.'
@@ -96,7 +113,10 @@ def replace_runs(paragraph, before, after, revision_ids=None, *, checked=False, 
 
     def revision(tag, run, value):
         node = ET.Element(W+tag, {W+'id': str(next(revision_ids)), W+'author': author, W+'date': date})
-        node.append(piece(run, value, tag == 'del'))
+        part = piece(run, value, tag == 'del')
+        if tag == 'ins':
+            highlight(part)
+        node.append(part)
         return node
 
     for a, b, replacement in reversed(minimal_diffs(before, after)):

@@ -211,6 +211,10 @@ def create_app(data_dir=None):
             secure=bool(public_origin), max_age=86400)
         return response
 
+    @app.get('/favicon.ico', include_in_schema=False)
+    def favicon():
+        return FileResponse(STATIC / 'assets' / 'quantara-mark.png', media_type='image/png')
+
     @app.get('/health')
     def health(): return {'status': 'ok'}
 

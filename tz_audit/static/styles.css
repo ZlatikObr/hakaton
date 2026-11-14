@@ -479,3 +479,11 @@ body.legal-page{display:block;background:var(--bg)}
 .flash{animation:flash 1.4s var(--ease)}
 @keyframes flash{0%,100%{box-shadow:var(--shadow)}30%{box-shadow:0 0 0 4px var(--blue),var(--shadow)}}
 @media (max-width:760px){.hero-cta{flex-direction:column;align-items:stretch;padding:18px;gap:14px;margin-bottom:14px}.hero-cta h2{font-size:19px}.button.cta{width:100%}}
+
+/* v4: текстовый логотип «КВАНТАРА / закупки» */
+.brand{gap:10px}
+.brand-icon{width:44px;height:44px;display:block;flex:none}
+.brand-text{display:inline-flex;flex-direction:column;line-height:1}
+.brand-text b{font-size:25px;font-weight:900;letter-spacing:.03em;color:var(--navy)}
+.brand-text small{align-self:flex-end;margin-top:3px;font-size:13px;font-weight:800;letter-spacing:.12em;color:var(--blue)}
+@media (max-width:760px){.brand-icon{width:30px;height:30px}.brand-text b{font-size:17px}.brand-text small{font-size:10px;margin-top:2px}.brand{gap:6px}}

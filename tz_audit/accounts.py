@@ -62,7 +62,7 @@ class Mailer:
                 return False
             raise AuthError('Вход по почте пока не настроен на сервере.')
         message = EmailMessage()
-        message['Subject'] = 'Код входа в Квантару: ' + code
+        message['Subject'] = 'Код входа в Квантара.Закупки: ' + code
         message['From'] = self.sender
         message['To'] = email
         message.set_content(f'Ваш код для входа: {code}\n\nКод действует 10 минут. Если вы не запрашивали вход, просто проигнорируйте это письмо.')

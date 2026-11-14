@@ -326,7 +326,7 @@ function startLive(){
  ticker=setInterval(tickProgress,250);
  let f=Math.floor(Math.random()*FACTS.length);const fact=()=>{const p=$('fact-text');p.textContent=FACTS[f++%FACTS.length];p.classList.remove('fade');void p.offsetWidth;p.classList.add('fade');};fact();factTimer=setInterval(fact,15000);
 }
-function stopLive(){clearInterval(ticker);clearInterval(factTimer);ticker=factTimer=null;document.title='Квантара · проверка технических заданий';}
+function stopLive(){clearInterval(ticker);clearInterval(factTimer);ticker=factTimer=null;document.title='Квантара.Закупки';}
 $('cancel-button').onclick=async()=>{if(!job)return;$('cancel-button').disabled=true;try{renderProgress(await post('/jobs/'+job.job_id+'/cancel',{}));}catch(e){alertMessage(e.message);$('cancel-button').disabled=false;}};
 $('notify-button').onclick=async()=>{try{const r=await Notification.requestPermission();$('notify-button').textContent=r==='granted'?'Уведомим, когда будет готово':'Уведомления запрещены в браузере';}catch{$('notify-button').textContent='Браузер не поддерживает уведомления';}$('notify-button').disabled=true;};
 function notifyDone(){try{if(document.hidden&&Notification.permission==='granted')new Notification('Проверка ТЗ завершена',{body:baseName()});}catch{}}

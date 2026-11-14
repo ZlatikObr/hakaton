@@ -3,7 +3,6 @@
 services:
   audit:
     build: .
-    image: tz-audit:local
     ports:
       - "127.0.0.1:${TZ_PORT:-8000}:8000"
     # .env необязателен: без него сервис стартует в локальном режиме без модели.

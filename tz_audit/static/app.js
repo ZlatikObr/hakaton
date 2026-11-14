@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let settings = {}, me = {email:null}, job = null, report = null, filename = '', activeTab = 'findings', activeFilter = 'all', busy = false;
-let lastEvent = 0, ticker = null, factTimer = null, clock = null, progress = {stage: 0, pct: 0, step: 0, max: 12};
+let lastEvent = 0, ticker = null, factTimer = null, progress = {stage: 0, pct: 0, step: 0, max: 12, est: 300, started: 0, last: 0, done: false};
 const selectedChanges = new Set();
 const blockInfo = new Map();
 
@@ -58,6 +58,8 @@ function updateReady(){
  $('run-button').disabled=busy||!settings.has_key||!$('privacy-approved').checked;
  $('run-hint').textContent=!settings.has_key?'Проверка моделью временно недоступна. Можно посмотреть демо без модели.':!$('privacy-approved').checked?'Отметьте, что просмотрели текст.':'';
  $('run-hint').hidden=!$('run-hint').textContent;
+ const est=job?.estimate_seconds;$('estimate-hint').hidden=!est;
+ if(est)$('estimate-hint').textContent='Примерное время проверки этого документа: '+fmtDuration(est.openrouter)+'. Демо без модели: '+fmtDuration(est.offline)+'.';
 }
 $('privacy-backend').onchange=()=>{$('privacy-hint').textContent=(PRIVACY_LABELS[$('privacy-backend').value]||[])[1]||'';};
 $('help-button').onclick=()=>$('help-dialog').showModal();
@@ -80,7 +82,7 @@ async function attachJob(id){if(!me.email||!id)return;try{await post('/my/jobs',
 let loginEmail='';
 function openLogin(){$('login-email-form').hidden=false;$('login-code-form').hidden=true;$('login-email-error').textContent='';$('login-code-error').textContent='';$('login-dialog').showModal();setTimeout(()=>$('login-email').focus(),50);}
 $('account-action').onclick=async()=>{if(!me.email)return openLogin();try{await post('/auth/logout',{});}catch{}me.email=null;renderAccount();if(!$('history-view').hidden)renderHistory();};
-$('login-email-form').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button[type=submit]');b.disabled=true;$('login-email-error').textContent='';
+$('login-email-form').onsubmit=async e=>{e.preventDefault();if(!$('login-consent').checked){$('login-email-error').textContent='Отметьте согласие на обработку адреса почты.';return;}const b=e.target.querySelector('button[type=submit]');b.disabled=true;$('login-email-error').textContent='';
  try{loginEmail=$('login-email').value.trim();const r=await post('/auth/request',{email:loginEmail});$('login-email-form').hidden=true;$('login-code-form').hidden=false;
   $('login-code-hint').textContent='Мы отправили 6 цифр на '+loginEmail+'. Код действует 10 минут.';$('login-code').value='';
   const old=document.querySelector('.demo-code');old?.remove();if(r.demo_code){const d=el('div','demo-code','Демо-режим, письмо не отправлялось. Ваш код: '+r.demo_code);$('login-code-hint').after(d);}
@@ -104,12 +106,12 @@ async function renderHistory(){
   const data=await api('/my/jobs');box.replaceChildren();
   if(!data.jobs.length){const e=el('div','empty-state');e.append(icon('folder'),el('h3','','Пока пусто'),el('p','','Загрузите первое техническое задание. После проверки оно появится в этом списке.'));const b=el('button','button primary','Новая проверка');b.onclick=reset;e.append(b);box.append(e);return;}
   const t=el('table','table'),h=el('tr');for(const x of ['Документ','Дата','Замечаний','Высокий риск','Правок','Статус'])h.append(el('th','',x));t.append(h);
-  const st={complete:['Готово','applied'],running:['Идет проверка','review'],prepared:['Не запускалась','']};
+  const st={complete:['Готово','applied'],running:['Идет проверка','review'],prepared:['Не запускалась',''],deleted:['Файлы удалены','']};
   data.jobs.forEach((j,k)=>{const r=el('tr','history-row');r.style.setProperty('animation-delay',(k*0.04)+'s');
    const d=el('td'),doc=el('div','doc'),ic=el('span','output-icon');ic.append(icon('doc-check'));doc.append(ic,(j.filename||'Документ').replace(/\.docx$/i,''));d.append(doc);
    const s=st[j.status]||st.prepared,sc=el('td');sc.append(el('span','state '+s[1],s[0]));
    r.append(d,el('td','muted',new Date(j.created*1000).toLocaleDateString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'})),el('td','num-cell',j.findings??'·'),el('td','num-cell red',j.high??'·'),el('td','num-cell',j.edits??'·'),sc);
-   r.onclick=()=>{store.set('tz-name-'+j.job_id,j.filename);history.replaceState(null,'','?job='+j.job_id);openSaved(j.job_id);};t.append(r);});
+   if(j.status==='deleted')r.classList.add('gone');else r.onclick=()=>{store.set('tz-name-'+j.job_id,j.filename);history.replaceState(null,'','?job='+j.job_id);openSaved(j.job_id);};t.append(r);});
   box.append(t);
  }catch(err){box.replaceChildren(el('p','empty',err.message));}
 }
@@ -118,12 +120,22 @@ async function renderHistory(){
 function reset(){if(busy)return;history.replaceState(null,'','/');job=null;report=null;$('result-save-note').replaceChildren();filename='';$('file-input').value='';$('privacy-approved').checked=false;$('preview-search').value='';alertMessage();view('upload',0);updateReady();}
 $('new-document').onclick=reset;$('replace-file').onclick=reset;$('nav-documents').onclick=reset;
 $('privacy-approved').onchange=updateReady;
+$('start-check').onclick=()=>{
+ // Без согласия сначала ведем к галочке, иначе сразу к блоку загрузки.
+ const target=$('terms-consent').checked?$('dropzone'):$('terms-consent').closest('.legal-card');
+ target.scrollIntoView({block:'center',behavior:'smooth'});
+ target.classList.remove('flash');void target.offsetWidth;target.classList.add('flash');
+};
+function syncConsent(){const ok=$('terms-consent').checked;$('dropzone').classList.toggle('locked',!ok);$('file-input').disabled=!ok;store.set('tz-terms',ok?'1':'');}
+$('terms-consent').checked=store.get('tz-terms')==='1';syncConsent();$('terms-consent').onchange=syncConsent;
+$('dropzone').addEventListener('click',e=>{if(!$('terms-consent').checked){e.preventDefault();alertMessage('Отметьте согласие с условиями сервиса, чтобы загрузить документ.');$('terms-consent').closest('.legal-card').scrollIntoView({block:'center',behavior:'smooth'});}});
 $('file-input').addEventListener('change',e=>{if(e.target.files[0])upload(e.target.files[0]);});
 for(const ev of ['dragenter','dragover'])$('dropzone').addEventListener(ev,e=>{e.preventDefault();$('dropzone').classList.add('drag-over');});
 for(const ev of ['dragleave','drop'])$('dropzone').addEventListener(ev,e=>{e.preventDefault();$('dropzone').classList.remove('drag-over');});
 $('dropzone').addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)upload(f);});
 async function upload(file){
  if(busy)return;
+ if(!$('terms-consent').checked)return alertMessage('Отметьте согласие с условиями сервиса, чтобы загрузить документ.');
  if(!file.name.toLowerCase().endsWith('.docx'))return alertMessage('Выберите документ Word в формате .docx.');
  if(file.size>12*1024*1024)return alertMessage('Файл больше 12 МБ. Разделите документ на части.');
  busy=true;filename=file.name;alertMessage();view('loading',0);
@@ -206,65 +218,117 @@ function stageOf(m){
  if(/ожидаем ответ|получен ответ|Ответ получен|уточн/i.test(m))return 1;
  return 0;
 }
+// Доля общего времени, к которой обычно начинается этап: по ней уточняем прогноз на лету.
+const STAGE_SHARE=[0,0,0.3,0.65,0.85,0.93]; // этап 1 начинается за секунды: по нему прогноз не уточняем
+const CAP=97;
+function fmtDuration(s){s=Math.max(0,Math.round(s));if(s<60)return 'меньше минуты';const m=Math.round(s/60);return '~'+m+' мин';}
+function fmtClock(s){s=Math.floor(s);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+function estimateFor(mode){const e=job?.estimate_seconds?.[mode];return e>0?e:(mode==='offline'?5:300);}
 function buildStages(){const ol=$('stages');ol.replaceChildren();STAGES.forEach(([t,s],i)=>{const li=el('li');const d=el('span','dot');d.append(i<progress.stage?icon('check'):el('b','',String(i+1)));const box=el('div');box.append(t,el('small','',s));li.append(d,box);li.classList.toggle('done',i<progress.stage);li.classList.toggle('active',i===progress.stage);ol.append(li);});}
-function setStage(s){if(s<=progress.stage)return;progress.stage=s;progress.pct=Math.max(progress.pct,STAGE_BASE[s]);buildStages();}
-function paintProgress(){const p=Math.min(99,Math.round(progress.pct));$('progress-percent').textContent=p;$('progress-fill').style.setProperty('width',p+'%');document.title='('+p+'%) Анализ ТЗ';}
+function setStage(s,at=Date.now()){
+ if(s<=progress.stage)return;progress.stage=s;buildStages();
+ const t=(at-progress.started)/1000,share=STAGE_SHARE[s];
+ // Пересчет прогноза по фактическому темпу: без скачков полосы, меняется только скорость.
+ if(share&&t>3){const implied=t/share;progress.est=Math.max(t+5,Math.min(progress.est*2,Math.max(progress.est/2,(progress.est+implied)/2)));}
+}
+function tickProgress(){
+ const now=Date.now(),t=(now-progress.started)/1000,dt=Math.max(0,(now-progress.last)/1000);progress.last=now;
+ if(progress.done){progress.pct=100;}
+ else{
+  if(t>progress.est-3)progress.est=t+20; // дольше прогноза: полоса замедляется, но не стоит
+  // Остаток считается от начала интервала: тогда полоса растет строго линейно до прогноза.
+  const remaining=Math.max(1,progress.est-(t-dt));
+  progress.pct=Math.min(CAP,progress.pct+(CAP-progress.pct)*Math.min(1,dt/remaining));
+ }
+ paintProgress(t);
+}
+function paintProgress(t=0){
+ const p=progress.done?100:Math.min(CAP,Math.floor(progress.pct));
+ $('progress-percent').textContent=p;$('progress-fill').style.setProperty('width',p+'%');document.title='('+p+'%) Анализ ТЗ';
+ $('elapsed').textContent='Прошло '+fmtClock(t);
+ $('remaining').textContent=progress.done?'Готово':(progress.est-t>25?'Осталось '+fmtDuration(progress.est-t):'Почти готово');
+}
+// Понятное описание события сервера для ленты «Сейчас в работе». null: событие только в техническом журнале.
+function describe(m){
+ let s;
+ if(/^Загружаем обезличенный/.test(m))return ['Документ передан агенту','Используется только обезличенный текст, который вы подтвердили'];
+ if(/локальные правила/.test(m))return ['Проверяем правила отправки','Убеждаемся, что скрытые данные не уйдут из сервиса'];
+ if((s=/Шаг (\d+)\/(\d+)/.exec(m))){counters.steps=+s[1];return ['Модель читает документ','Шаг '+s[1]+' из '+s[2]+': требования, таблицы, сроки и формулировки'];}
+ if(/Ищем нормативные/.test(m)){counters.sources++;return ['Ищем нормативные основания','Законы о закупках, ГОСТ и ОКПД 2 на официальных сайтах'];}
+ if(/Читаем и обезличиваем источник/.test(m)){counters.sources++;return ['Читаем найденный источник','Берем только выдержки, которые подтверждают замечание'];}
+ if(/выдержк/i.test(m))return ['Сверяем выдержку из поиска','Страница источника недоступна, используем выдержку с пометкой'];
+ if(/Проверяем цитаты и предложенные правки/.test(m)){counters.checks++;return ['Проверяем черновик замечаний','Каждая цитата сверяется с исходным текстом ТЗ'];}
+ if(/Первый проход завершён/.test(m))return ['Первый проход завершен','Перепроверяем документ по семи темам в свежем контексте'];
+ if(/прошёл проверку цитат/.test(m)){counters.checks++;return ['Замечания подтверждены','Цитаты совпадают с текстом документа'];}
+ if(/Ответ требует уточнения|слишком много операций/.test(m))return ['Агент уточняет ответ','Часть замечаний не прошла проверку и отправлена на доработку'];
+ if(/HTTP 429/.test(m))return ['Модель перегружена','Повторяем запрос через несколько секунд'];
+ if(/Применяем минимальные правки/.test(m))return ['Вносим правки в Word','Исправления записываются в копию ТЗ и выделяются желтым'];
+ if(/Формируем отч/.test(m))return ['Собираем отчет','Риски, рекомендации и ссылки на нормы'];
+ if(/^Готово/.test(m))return ['Проверка завершена','Отчет и исправленное ТЗ готовы'];
+ return null;
+}
+let counters={steps:0,sources:0,checks:0};
+function addFeed(title,detail,time){
+ $('now-title').textContent=title;$('now-detail').textContent=detail;
+ const feed=$('feed'),last=feed.firstElementChild;
+ if(last&&last.dataset.title===title){last.querySelector('small').textContent=detail;return;}
+ const li=el('li');li.dataset.title=title;const tm=el('time','',time);const box=el('div');box.append(el('b','',title),el('small','',detail));li.append(tm,box);
+ feed.prepend(li);while(feed.children.length>8)feed.lastElementChild.remove();
+}
 function renderProgress(state){
- $('live-stage').textContent=state.stage||'';
  for(const ev of state.events||[]){
   if(ev.seq<=lastEvent)continue;lastEvent=ev.seq;
+  const at=Date.parse(ev.time)||Date.now();
+  // При повторном открытии страницы время считается от фактического начала проверки.
+  if(ev.seq===1&&at<progress.started&&!progress.done){progress.started=at;progress.last=Date.now();progress.pct=Math.min(CAP*0.9,CAP*(Date.now()-at)/1000/progress.est);}
   const step=/Шаг (\d+)\/(\d+)/.exec(ev.message);if(step){progress.step=+step[1];progress.max=+step[2];}
-  setStage(stageOf(ev.message));
-  const li=el('li'),t=el('time','',new Date(ev.time).toLocaleTimeString('ru-RU'));li.append(t,el('span','',ev.message));$('progress-log').prepend(li);
+  setStage(stageOf(ev.message),at);
+  const time=new Date(ev.time).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const li=el('li'),t=el('time','',time);li.append(t,el('span','',ev.message));$('progress-log').prepend(li);
+  const d=describe(ev.message);if(d)addFeed(d[0],d[1],time);
+  else if(/ожидаем ответ модели/.test(ev.message))$('now-detail').textContent='Ждем ответ модели. Обычно это занимает от 10 секунд до пары минут';
+  if(/Первый проход завершён/.test(ev.message))for(const c of $('topics').children)c.classList.add('on');
  }
+ $('count-steps').textContent=counters.steps;$('count-sources').textContent=counters.sources;$('count-checks').textContent=counters.checks;
  $('cancel-button').disabled=['cancelling','cancelled','complete','failed'].includes(state.status);
  if(state.status==='cancelling')$('cancel-label').textContent='Останавливаем...';
 }
 function startLive(){
- const pool=job.public.blocks.filter(b=>b.text.length>35&&b.text.length<400&&!b.text.includes('⟦PRIVATE_'));
- const topics=$('topics');topics.replaceChildren();const keys=Object.keys(coverageLabels);
- for(const k of keys){const c=el('span','chip');c.dataset.topic=k;c.append(icon('check'),coverageLabels[k]);topics.append(c);}
- let i=0,typing=null;
- const next=()=>{
-  if(pool.length){const b=pool[Math.floor(Math.random()*pool.length)];const info=blockInfo.get(b.id)||{};
-   $('reading-label').textContent=info.where||'Текст документа';
-   const p=$('reading-text');const text=b.text.replace(/ \| /g,' · ').slice(0,190);p.textContent='';p.classList.remove('fade');void p.offsetWidth;p.classList.add('fade');
-   let n=0;clearInterval(typing);const caret=el('span','caret');typing=setInterval(()=>{n+=3;p.textContent=text.slice(0,n);p.append(caret);if(n>=text.length)clearInterval(typing);},16);}
-  const chips=[...topics.children];chips.forEach(c=>c.classList.remove('now'));
-  const k=i%chips.length;chips[k].classList.add('now','on');i++;
-  progress.pct=Math.min(STAGE_BASE[progress.stage+1]-1,progress.pct+(progress.stage===1||progress.stage===2?1.6:0.9));paintProgress();
- };
- next();ticker=setInterval(next,3200);
- let f=Math.floor(Math.random()*FACTS.length);const fact=()=>{const p=$('fact-text');p.textContent=FACTS[f++%FACTS.length];p.classList.remove('fade');void p.offsetWidth;p.classList.add('fade');};fact();factTimer=setInterval(fact,9000);
+ const topics=$('topics');topics.replaceChildren();
+ for(const k of Object.keys(coverageLabels)){const c=el('span','chip');c.dataset.topic=k;c.append(icon('check'),coverageLabels[k]);topics.append(c);}
+ ticker=setInterval(tickProgress,250);
+ let f=Math.floor(Math.random()*FACTS.length);const fact=()=>{const p=$('fact-text');p.textContent=FACTS[f++%FACTS.length];p.classList.remove('fade');void p.offsetWidth;p.classList.add('fade');};fact();factTimer=setInterval(fact,15000);
 }
-function stopLive(){clearInterval(ticker);clearInterval(factTimer);clearInterval(clock);ticker=factTimer=clock=null;document.title='Квантара · проверка технических заданий';}
+function stopLive(){clearInterval(ticker);clearInterval(factTimer);ticker=factTimer=null;document.title='Квантара · проверка технических заданий';}
 $('cancel-button').onclick=async()=>{if(!job)return;$('cancel-button').disabled=true;try{renderProgress(await post('/jobs/'+job.job_id+'/cancel',{}));}catch(e){alertMessage(e.message);$('cancel-button').disabled=false;}};
 $('notify-button').onclick=async()=>{try{const r=await Notification.requestPermission();$('notify-button').textContent=r==='granted'?'Уведомим, когда будет готово':'Уведомления запрещены в браузере';}catch{$('notify-button').textContent='Браузер не поддерживает уведомления';}$('notify-button').disabled=true;};
 function notifyDone(){try{if(document.hidden&&Notification.permission==='granted')new Notification('Проверка ТЗ завершена',{body:baseName()});}catch{}}
 async function monitor(){
  while(true){
-  const state=await api('/jobs/'+job.job_id+'/status');renderProgress(state);paintProgress();
+  const state=await api('/jobs/'+job.job_id+'/status');renderProgress(state);
   if(state.status==='failed'){stopLive();view('preview',1);alertMessage(state.error);return;}
   if(state.status==='cancelled'){stopLive();view('preview',1);alertMessage('Проверка остановлена. Исходный файл сохранен, можно запустить снова.');return;}
   if(state.status==='complete')break;
   await new Promise(r=>setTimeout(r,1000));
  }
- progress.pct=100;$('progress-percent').textContent='100';$('progress-fill').style.setProperty('width','100%');setStage(6);
+ progress.done=true;setStage(6);paintProgress((Date.now()-progress.started)/1000);
  await new Promise(r=>setTimeout(r,700));stopLive();notifyDone();
  report=await api('/jobs/'+job.job_id+'/report.json');renderResult();view('result',3);
 }
 function lostConnection(error){busy=true;stopLive();view('loading',2);$('loading-title').textContent='Связь с проверкой прервалась';$('loading-description').textContent='Сервер может продолжать работу. Восстановите связь, чтобы увидеть результат.';$('reconnect-button').hidden=false;alertMessage(error.message);updateReady();}
-$('reconnect-button').onclick=async()=>{$('reconnect-button').disabled=true;try{beginAnalysisView('Продолжаем проверку');await monitor();busy=false;$('reconnect-button').hidden=true;alertMessage();updateReady();}catch(e){lostConnection(e);}finally{$('reconnect-button').disabled=false;}};
-function beginAnalysisView(title){
- progress={stage:0,pct:2,step:0,max:12};lastEvent=0;$('progress-log').replaceChildren();
+$('reconnect-button').onclick=async()=>{$('reconnect-button').disabled=true;try{beginAnalysisView('Продолжаем проверку','openrouter');await monitor();busy=false;$('reconnect-button').hidden=true;alertMessage();updateReady();}catch(e){lostConnection(e);}finally{$('reconnect-button').disabled=false;}};
+function beginAnalysisView(title,mode){
+ const now=Date.now();
+ progress={stage:0,pct:0,step:0,max:12,est:estimateFor(mode),started:now,last:now,done:false};counters={steps:0,sources:0,checks:0};lastEvent=0;
+ $('progress-log').replaceChildren();$('feed').replaceChildren();
+ $('now-title').textContent='Запускаем проверку';$('now-detail').textContent='Готовим обезличенный текст к отправке';
  $('analysis-title').textContent=title;$('cancel-label').textContent='Остановить';$('cancel-button').disabled=true;
- buildStages();paintProgress();view('analysis',2);
- const started=Date.now();clearInterval(clock);clock=setInterval(()=>{const s=Math.floor((Date.now()-started)/1000);$('elapsed').textContent='Прошло '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0');},1000);
+ buildStages();paintProgress(0);view('analysis',2);
  startLive();
 }
 async function run(mode){
  if(busy||!job)return;busy=true;alertMessage();updateReady();
- beginAnalysisView(mode==='offline'?'Локальная проверка без модели':'Агент проверяет документ');
+ beginAnalysisView(mode==='offline'?'Локальная проверка без модели':'Агент проверяет документ',mode);
  let submitted=false,disconnected=false;
  try{
   await post('/jobs/'+job.job_id+'/run',{mode,approved_digest:job.release_digest,web_enabled:$('web-enabled').checked});
@@ -362,13 +426,21 @@ function renderSources(box){
  box.append(list.children.length?list:el('p','empty','Подтвержденных внешних источников нет.'));
 }
 
+function retentionText(){const h=settings.retention_hours;if(!(h>0))return 'Файлы удаляются по кнопке «Удалить файлы»';return 'Документ и результаты удаляются автоматически через '+(h%24===0?(h/24===1?'24 часа':h/24+' сут.'):h+' ч')+' после последнего изменения';}
+$('delete-files').onclick=async()=>{
+ if(!job||busy)return;if(!confirm('Удалить исходный документ, отчет и исправленное ТЗ с сервера? Скачанные файлы останутся у вас.'))return;
+ try{await api('/jobs/'+job.job_id,{method:'DELETE'});job=null;report=null;history.replaceState(null,'','/');view('upload',0);alertMessage();
+  noteHTML($('save-note'),'check','Файлы проверки удалены с сервера.',null,true);}
+ catch(e){alertMessage(e.message);}
+};
+
 /* init */
 async function openSaved(saved){
  filename=store.get('tz-name-'+saved)||filename||'';alertMessage();
  try{
   job=await api('/jobs/'+saved);renderPreview();
   const state=await api('/jobs/'+saved+'/status');
-  if(['queued','running','cancelling'].includes(state.status)){busy=true;beginAnalysisView('Проверка продолжается');$('cancel-button').disabled=false;try{await monitor();busy=false;updateReady();}catch(e){lostConnection(e);}}
+  if(['queued','running','cancelling'].includes(state.status)){busy=true;beginAnalysisView('Проверка продолжается','openrouter');$('cancel-button').disabled=false;try{await monitor();busy=false;updateReady();}catch(e){lostConnection(e);}}
   else if(state.status==='complete'||job.status==='complete'){report=await api('/jobs/'+saved+'/report.json');renderResult();view('result',3);}
   else{view('preview',1);if(state.status==='cancelled')alertMessage('Предыдущая проверка остановлена. Можно запустить ее снова.');}
  }catch(e){view('upload',0);alertMessage('Не удалось открыть проверку. '+e.message);}
@@ -377,7 +449,7 @@ async function init(){
  try{
   [settings,me]=await Promise.all([api('/settings'),api('/me').catch(()=>({email:null,mail_enabled:false}))]);
   if(settings.privacy_profiles){$('privacy-backend').replaceChildren();for(const p of settings.privacy_profiles){if(!p.available)continue;const o=el('option','',(PRIVACY_LABELS[p.id]||[p.label])[0]);o.value=p.id;o.selected=p.id===settings.privacy_default;$('privacy-backend').append(o);}$('privacy-backend').onchange();}
-  updateReady();renderAccount();
+  updateReady();renderAccount();$('retention-text').textContent=retentionText();$('retention-note').textContent=retentionText()+'.';
   const saved=new URLSearchParams(location.search).get('job');
   if(saved&&/^[a-f0-9]{32}$/.test(saved))await openSaved(saved);else view('upload',0);
  }catch(e){alertMessage('Не удалось загрузить страницу. '+e.message);}

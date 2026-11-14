@@ -279,13 +279,14 @@ def test_history_is_private_per_user(demo_client, docx_bytes):
     assert demo_client.get('/my/jobs', headers=AUTH).json() == {'email': 'b@example.com', 'jobs': []}
 
 
-def test_history_skips_deleted_jobs(demo_client, docx_bytes, tmp_path):
+def test_history_marks_deleted_jobs(demo_client, docx_bytes, tmp_path):
     import shutil
     demo_login(demo_client)
     job = upload(demo_client, docx_bytes)
     demo_client.post('/my/jobs', headers=AUTH, json={'job_id': job})
     shutil.rmtree(tmp_path / job)
-    assert demo_client.get('/my/jobs', headers=AUTH).json()['jobs'] == []
+    items = demo_client.get('/my/jobs', headers=AUTH).json()['jobs']
+    assert [(i['job_id'], i['status']) for i in items] == [(job, 'deleted')]
 
 
 # --- имена скачиваемых файлов и желтое выделение ---

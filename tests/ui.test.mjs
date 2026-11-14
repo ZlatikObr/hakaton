@@ -17,7 +17,7 @@ async function setup(handler,url='http://localhost:8000',before=()=>{}){
  w.scrollTo=()=>{};w.Element.prototype.scrollIntoView=function(){};
  w.fetch=async(path,options={})=>{const r=handler(path,options);const bad=r&&r.__status;return {ok:!bad,status:bad||200,json:async()=>bad?{detail:r.detail}:r};};
  before(w);
- w.eval(js+'\nwindow.testUI={preview(value){job=value;renderPreview();},result(value){report=value;renderTab();},progress:renderProgress,run,monitor};');await tick();return dom;
+ w.eval(js+'\nwindow.testUI={preview(value){job=value;renderPreview();},result(value){report=value;renderTab();},progress:renderProgress,run,monitor};window.app={upload,updateReady,beginAnalysisView,tickProgress,stopLive,setJob(v){job=v;},get progress(){return progress;}};');await tick();return dom;
 }
 test('page loads only local assets and opens help',async()=>{
  const dom=await setup(()=>settings);const d=dom.window.document;
@@ -129,6 +129,9 @@ test('demo login shows the code, signs in and saves the current job',async()=>{
  d.getElementById('account-action').click();assert.equal(d.getElementById('login-dialog').open,true);
  d.getElementById('login-email').value='user@example.com';
  d.getElementById('login-email-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));await tick();
+ assert.match(d.getElementById('login-email-error').textContent,/согласие/);assert.ok(!calls.some(c=>c[0]==='/auth/request'),'без согласия код не запрашивается');
+ d.getElementById('login-consent').checked=true;
+ d.getElementById('login-email-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));await tick();
  assert.equal(d.getElementById('login-code-form').hidden,false);
  assert.match(d.querySelector('.demo-code').textContent,/123456/);
  d.getElementById('login-code').value='123456';
@@ -143,7 +146,7 @@ test('demo login shows the code, signs in and saves the current job',async()=>{
 test('login errors are shown in the dialog',async()=>{
  const dom=await setup(path=>path==='/settings'?settings:path==='/me'?{email:null,mail_enabled:true}:path==='/auth/request'?{__status:400,detail:'Проверьте адрес почты.'}:{});
  const d=dom.window.document;
- d.getElementById('account-action').click();d.getElementById('login-email').value='bad';
+ d.getElementById('account-action').click();d.getElementById('login-email').value='bad';d.getElementById('login-consent').checked=true;
  d.getElementById('login-email-form').dispatchEvent(new dom.window.Event('submit',{cancelable:true}));await tick();
  assert.equal(d.getElementById('login-email-error').textContent,'Проверьте адрес почты.');
  assert.equal(d.getElementById('login-code-form').hidden,true);dom.window.close();
@@ -173,4 +176,77 @@ test('history asks guests to sign in',async()=>{
  const dom=await setup(path=>path==='/me'?{email:null,mail_enabled:true}:settings);const d=dom.window.document;
  d.getElementById('nav-history').click();await tick();
  assert.match(d.getElementById('history-content').textContent,/Войдите по почте/);dom.window.close();
+});
+
+test('upload is locked until the user accepts the terms; choice is remembered',async()=>{
+ const calls=[];
+ const dom=await setup(path=>{calls.push(path);return path==='/settings'?{...settings,retention_hours:24}:{};});
+ const d=dom.window.document,w=dom.window;
+ assert.ok(d.getElementById('dropzone').classList.contains('locked'));
+ assert.equal(d.getElementById('file-input').disabled,true);
+ assert.match(d.getElementById('retention-text').textContent,/24 часа/);
+ w.app.upload(new w.File(['x'],'a.docx'));await tick();
+ assert.match(d.getElementById('alert').textContent,/согласие/);assert.ok(!calls.includes('/jobs'));
+ d.getElementById('terms-consent').checked=true;d.getElementById('terms-consent').dispatchEvent(new w.Event('change'));
+ assert.ok(!d.getElementById('dropzone').classList.contains('locked'));
+ assert.equal(w.localStorage.getItem('tz-terms'),'1');
+ assert.ok(d.querySelector('a[href="/static/terms.html"]')&&d.querySelector('a[href="/static/privacy.html"]'));
+ dom.window.close();
+});
+test('result shows the disclaimer; files can be deleted',async()=>{
+ const job='c'.repeat(32);let deleted=false;
+ const dom=await setup((path,options)=>{
+  if(path==='/settings')return settings;
+  if(path.endsWith('/status'))return {status:'complete',events:[]};
+  if(path.endsWith('report.json'))return {mode:'openrouter',stats:{applied_edits:0},review:{summary:'ok',findings:[]},changes:[],sources:[]};
+  if(path==='/jobs/'+job&&options.method==='DELETE'){deleted=true;return {deleted:true};}
+  return {job_id:job,blocks:0,redactions:{},public:{blocks:[]}};
+ },'http://localhost:8000/?job='+job);
+ const d=dom.window.document;dom.window.confirm=()=>true;
+ assert.match(d.querySelector('#result-view .disclaimer').textContent,/не юридическое заключение/);
+ d.getElementById('delete-files').click();await tick(20);
+ assert.ok(deleted);assert.equal(d.getElementById('upload-view').hidden,false);
+ assert.match(d.getElementById('save-note').textContent,/удалены/);
+ dom.window.close();
+});
+test('preview shows the per-file time estimate',async()=>{
+ const dom=await setup(()=>settings);const d=dom.window.document;
+ dom.window.testUI.preview({job_id:'a'.repeat(32),blocks:1,redactions:{},estimate_seconds:{openrouter:330,offline:4},public:{blocks:[{id:'b0001',kind:'paragraph',text:'ТЗ'}]}});
+ dom.window.app.updateReady();
+ assert.equal(d.getElementById('estimate-hint').hidden,false);
+ assert.match(d.getElementById('estimate-hint').textContent,/~6 мин/);
+ assert.match(d.getElementById('estimate-hint').textContent,/меньше минуты/);
+ dom.window.close();
+});
+test('progress grows evenly by time and the live feed describes real events',async()=>{
+ const dom=await setup(()=>settings);const d=dom.window.document,w=dom.window;
+ w.app.setJob({job_id:'a'.repeat(32),estimate_seconds:{openrouter:100,offline:4},public:{blocks:[]}});w.app.beginAnalysisView('t','openrouter');const pr=()=>w.app.progress;
+ // 25 секунд из прогнозных 100: около четверти полосы.
+ pr().started=Date.now()-25000;pr().last=pr().started;w.app.tickProgress();
+ const p1=+d.getElementById('progress-percent').textContent;assert.ok(p1>=20&&p1<=28,'p1='+p1);
+ assert.match(d.getElementById('remaining').textContent,/Осталось ~1 мин/);
+ pr().started-=25000;pr().last-=25000;w.app.tickProgress();
+ const p2=+d.getElementById('progress-percent').textContent;assert.ok(p2>p1&&p2<=55,'p2='+p2);
+ // Время вышло: полоса не доходит до 100 и не стоит, пишем «Почти готово».
+ pr().started-=200000;pr().last=Date.now()-1000;w.app.tickProgress();
+ const p3=+d.getElementById('progress-percent').textContent;assert.ok(p3>p2&&p3<100,'p3='+p3);
+ assert.equal(d.getElementById('remaining').textContent,'Почти готово');
+ const ev=(seq,message)=>({seq,time:'2026-11-14T10:00:00Z',message});
+ w.testUI.progress({status:'running',events:[ev(1,'Загружаем обезличенный документ'),ev(2,'Шаг 3/12: проверяем исходящие данные'),ev(3,'Шаг 3: ожидаем ответ модели'),ev(4,'Ищем нормативные источники'),ev(5,'Ищем нормативные источники'),ev(6,'Первый проход завершён. Перепроверяем полноту по семи темам')]});
+ assert.equal(d.getElementById('now-title').textContent,'Первый проход завершен');
+ assert.equal(d.getElementById('count-steps').textContent,'3');assert.equal(d.getElementById('count-sources').textContent,'2');
+ const feed=[...d.querySelectorAll('#feed li b')].map(b=>b.textContent);
+ assert.deepEqual(feed,['Первый проход завершен','Ищем нормативные основания','Модель читает документ','Документ передан агенту']);
+ assert.equal(d.querySelectorAll('#topics .chip.on').length,7);
+ w.app.stopLive();dom.window.close();
+});
+
+test('top call-to-action scrolls to consent first, then to the upload block',async()=>{
+ const dom=await setup(()=>settings);const d=dom.window.document,w=dom.window;let scrolled=[];
+ w.Element.prototype.scrollIntoView=function(){scrolled.push(this.id||this.className);};
+ const btn=d.getElementById('start-check');assert.equal(btn.textContent.trim(),'Запустить проверку ТЗ');
+ assert.ok(btn.compareDocumentPosition(d.getElementById('dropzone'))&w.Node.DOCUMENT_POSITION_FOLLOWING);
+ btn.click();assert.match(scrolled.pop(),/legal-card/);
+ d.getElementById('terms-consent').checked=true;btn.click();assert.equal(scrolled.pop(),'dropzone');
+ assert.ok(d.getElementById('dropzone').classList.contains('flash'));dom.window.close();
 });

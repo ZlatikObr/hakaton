@@ -5,6 +5,7 @@ import json
 import re
 import os
 import secrets
+import shutil
 import sqlite3
 import time
 import threading
@@ -28,6 +29,7 @@ from .service import Service, JobError
 from .accounts import Accounts, AuthError, SESSION_TTL
 from .progress import RunControl, RunCancelled
 from .model_profiles import MODELS, route_info
+from .timing import Timings, document_chars, purge_expired
 
 STATIC = Path(__file__).with_name('static')
 
@@ -79,6 +81,24 @@ def create_app(data_dir=None):
     runtime = {'key': os.getenv('OPENROUTER_API_KEY', ''), 'model': os.getenv('OPENROUTER_MODEL', AgentConfig.model)}
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='tz-review')
     progress, state_lock = {}, threading.Lock()
+    timings = Timings(service.root)
+    # Документы не храним дольше необходимого: каталоги заданий удаляются после срока хранения.
+    retention_hours = float(os.getenv('TZ_RETENTION_HOURS', '24') or 0)
+
+    def active_jobs():
+        with state_lock:
+            return frozenset(j for j, c in progress.items() if c.snapshot()['status'] in {'queued', 'running', 'cancelling'})
+
+    def cleanup_loop():
+        while True:
+            try:
+                purge_expired(service.root, retention_hours, active_jobs())
+            except Exception:
+                pass
+            time.sleep(1800)
+
+    if retention_hours > 0 and data_dir is None:
+        threading.Thread(target=cleanup_loop, name='tz-retention', daemon=True).start()
 
     # Необязательный личный кабинет: вход по коду из письма, история проверок.
     accounts = Accounts(str(service.root))
@@ -192,7 +212,8 @@ def create_app(data_dir=None):
         return {'can_edit_key': not anonymous, 'has_key': bool(runtime['key']), 'model': runtime['model'], 'models': MODELS,
             'model_routes': {model: route_info(model) for model in MODELS},
             'search_backend': os.getenv('TZ_SEARCH_BACKEND', 'openrouter'),
-            'privacy_profiles': privacy_profiles(), 'privacy_default': 'natasha'}
+            'privacy_profiles': privacy_profiles(), 'privacy_default': 'natasha',
+            'retention_hours': retention_hours}
 
     class EmailBody(Strict):
         email: str = Field(min_length=3, max_length=254)
@@ -243,11 +264,13 @@ def create_app(data_dir=None):
             raise HTTPException(401, 'Войдите по почте, чтобы видеть историю проверок.')
         items = []
         for job in accounts.jobs(email):
+            item = {**job, 'status': 'prepared', 'findings': None, 'high': None, 'edits': None}
             try:
                 path = service.path(job['job_id'])
             except JobError:
+                # Файлы удалены по сроку хранения или пользователем: в истории остаются только название и дата.
+                items.append({**item, 'status': 'deleted'})
                 continue
-            item = {**job, 'status': 'prepared', 'findings': None, 'high': None, 'edits': None}
             report_file = path / 'report.json'
             if report_file.is_file():
                 item['status'] = 'complete'
@@ -308,7 +331,20 @@ def create_app(data_dir=None):
         result = await safe_call(service.preview, job_id)
         _, _, public, _ = await safe_call(service.load, job_id)
         result['release_digest'] = release_digest(public)
+        chars = document_chars(public)
+        result['estimate_seconds'] = {mode: timings.estimate(mode, chars) for mode in ('openrouter', 'offline')}
         return result
+
+    @app.delete('/jobs/{job_id}', dependencies=[Depends(authorize)])
+    async def delete_job(job_id: str):
+        path = await safe_call(service.path, job_id)
+        with state_lock:
+            control = progress.get(job_id)
+            if control is not None and control.snapshot()['status'] in {'queued', 'running', 'cancelling'}:
+                raise HTTPException(409, 'Документ еще обрабатывается. Остановите проверку и повторите.')
+            progress.pop(job_id, None)
+        await run_in_threadpool(shutil.rmtree, path)
+        return {'deleted': True}
 
     class Analyze(Strict):
         mode: Literal['offline', 'openrouter'] = 'offline'
@@ -370,10 +406,15 @@ def create_app(data_dir=None):
         def work():
             try:
                 control.start()
+                started = time.monotonic()
                 config = AgentConfig.from_env()
                 config.model, config.web_enabled = model, body.web_enabled
                 service.analyze(job_id, body.mode, body.approved_digest,
                     client=OpenRouter(key) if body.mode == 'openrouter' else None, config=config, control=control)
+                try:
+                    timings.record(body.mode, document_chars(public), time.monotonic() - started)
+                except OSError:
+                    pass
             except RunCancelled:
                 control.cancelled()
             except Exception as exc:

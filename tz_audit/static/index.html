@@ -66,6 +66,10 @@
 
   <!-- 1. Загрузка -->
   <section id="upload-view" class="view">
+   <div class="hero-cta">
+    <div><h2>Проверка ТЗ на закупку за несколько минут</h2><p class="muted">Найдем противоречия и риски по 44-ФЗ и 223-ФЗ, предложим правки прямо в Word</p></div>
+    <button type="button" class="button primary cta" id="start-check"><svg><use href="#i-upload"/></svg>Запустить проверку ТЗ</button>
+   </div>
    <div class="card scope">
     <div class="scope-head"><h2>Что проверим</h2><span class="muted">Каждое замечание привязано к конкретному фрагменту ТЗ</span></div>
     <div class="chips" id="scope-chips">
@@ -79,7 +83,18 @@
 
    <div class="save-note" id="save-note"></div>
 
-   <label class="card dropzone" id="dropzone" for="file-input">
+   <div class="card legal-card">
+    <div class="legal-head"><svg><use href="#i-info"/></svg><b>Перед загрузкой</b></div>
+    <ul class="legal-list">
+     <li><b>Уберите коммерческую тайну и ноу-хау.</b> Не загружайте сведения, которые нельзя раскрывать: неопубликованные условия закупки, коммерчески ценные идеи и разработки.</li>
+     <li><b>Персональные данные скрываются автоматически</b>, но распознавание не гарантирует полноты. На следующем шаге проверьте текст, прежде чем отправлять его модели.</li>
+     <li><b>Файлы не хранятся постоянно.</b> <span id="retention-text">Документ и результаты удаляются автоматически через 24 часа</span>, а также сразу по кнопке «Удалить файлы».</li>
+     <li><b>Результат требует проверки специалистом.</b> Сервис подсказывает риски, но не заменяет юриста и не отвечает за решения, принятые по его результатам.</li>
+    </ul>
+    <label class="approval consent"><input type="checkbox" id="terms-consent"><span class="checkbox" aria-hidden="true"><svg><use href="#i-check"/></svg></span><span>Принимаю <a href="/static/terms.html" target="_blank" rel="noopener">пользовательское соглашение</a> и даю согласие на обработку персональных данных по <a href="/static/privacy.html" target="_blank" rel="noopener">политике</a></span></label>
+   </div>
+
+   <label class="card dropzone locked" id="dropzone" for="file-input">
     <div class="doc-stack" aria-hidden="true">
      <span class="sheet s3"></span><span class="sheet s2"></span>
      <span class="sheet s1"><i></i><i></i><i></i><i class="short"></i><b class="scan"></b></span>
@@ -142,6 +157,7 @@
      <button id="run-button" class="button primary" disabled>Запустить проверку<svg><use href="#i-arrow"/></svg></button>
     </div>
     <p id="run-hint" class="hint"></p>
+    <p id="estimate-hint" class="hint estimate" hidden></p>
    </div>
   </section>
 
@@ -154,7 +170,7 @@
       <div class="percent"><b id="progress-percent">0</b><span>%</span></div>
      </div>
      <div class="bar"><span id="progress-fill"></span></div>
-     <div class="progress-meta"><span id="elapsed">0:00</span><span id="live-stage" role="status">Запускаем</span></div>
+     <div class="progress-meta"><span id="elapsed">Прошло 0:00</span><span id="remaining">Оцениваем время</span></div>
      <ol class="stages" id="stages"></ol>
      <div class="progress-actions">
       <button id="notify-button" class="button ghost small"><svg><use href="#i-bell"/></svg>Сообщить, когда готово</button>
@@ -164,11 +180,19 @@
     <div class="live-col">
      <div class="card live-card">
       <span class="eyebrow">СЕЙЧАС В РАБОТЕ</span>
-      <div class="reading" id="reading"><span class="reading-label" id="reading-label">Фрагмент документа</span><p id="reading-text"></p></div>
+      <div class="now" role="status"><b id="now-title">Запускаем проверку</b><p id="now-detail" class="muted">Готовим обезличенный текст к отправке</p></div>
+      <div class="counters">
+       <div><b id="count-steps">0</b><span>шагов модели</span></div>
+       <div><b id="count-sources">0</b><span>обращений к источникам</span></div>
+       <div><b id="count-checks">0</b><span>проверок результата</span></div>
+      </div>
+      <span class="eyebrow muted-eyebrow">ХОД ПРОВЕРКИ</span>
+      <ol class="feed" id="feed" aria-live="polite"></ol>
+      <span class="eyebrow muted-eyebrow">ТЕМЫ ПЕРЕПРОВЕРКИ</span>
       <div class="topics" id="topics"></div>
      </div>
      <div class="card fact-card" id="fact-card"><span class="eyebrow">ПОЛЕЗНО ЗНАТЬ</span><p id="fact-text"></p></div>
-     <details class="card log-card" id="progress-panel"><summary><span class="eyebrow">ЖУРНАЛ</span><span class="muted small-text">только этапы, без текста документа</span></summary><ol id="progress-log" aria-live="polite"></ol></details>
+     <details class="card log-card" id="progress-panel"><summary><span class="eyebrow">ТЕХНИЧЕСКИЙ ЖУРНАЛ</span><span class="muted small-text">только этапы, без текста документа</span></summary><ol id="progress-log"></ol></details>
     </div>
    </div>
   </section>
@@ -184,6 +208,7 @@
    </div>
    <div class="save-note" id="result-save-note"></div>
    <div id="demo-notice" class="notice" hidden>Демо-режим: модель и интернет не использовались, в отчете только предварительные сигналы.</div>
+   <div class="disclaimer"><svg><use href="#i-info"/></svg><span><b>Это автоматический анализ, а не юридическое заключение.</b> Перед публикацией закупки проверьте ТЗ и предложенные правки у специалиста. Сервис не несет ответственности за решения, принятые по результатам проверки.</span></div>
    <div class="stats">
     <div class="stat"><span>Замечаний</span><b data-count id="stat-findings">0</b><small>с привязкой к тексту</small></div>
     <div class="stat danger"><span>Высокий риск</span><b data-count id="stat-high">0</b><small>стоит исправить до публикации</small></div>
@@ -201,7 +226,8 @@
     <div class="chips filter" id="filters"></div>
     <div id="result-content"></div>
    </div>
-   <div class="center-row"><button id="new-document" class="button ghost"><svg><use href="#i-plus"/></svg>Проверить другой документ</button></div>
+   <div class="center-row"><button id="new-document" class="button ghost"><svg><use href="#i-plus"/></svg>Проверить другой документ</button><button id="delete-files" class="button danger"><svg><use href="#i-close"/></svg>Удалить файлы</button></div>
+   <p class="muted small-text center-text" id="retention-note"></p>
   </section>
   <!-- Мои проверки -->
   <section id="history-view" class="view" hidden>
@@ -209,6 +235,10 @@
    <div class="card results-card" id="history-card"><div id="history-content"></div></div>
   </section>
  </main>
+ <footer class="site-footer">
+  <span>Квантара проверяет ТЗ автоматически и не оказывает юридических услуг. Результат требует проверки специалистом.</span>
+  <nav><a href="/static/terms.html" target="_blank" rel="noopener">Пользовательское соглашение</a><a href="/static/privacy.html" target="_blank" rel="noopener">Обработка персональных данных</a></nav>
+ </footer>
 </div>
 
 <div id="redact-pop" class="redact-pop" hidden>
@@ -224,6 +254,7 @@
   <p class="muted">Вход нужен только для того, чтобы проверки сохранялись в «Мои проверки». Без входа проверка работает так же, но результат не сохранится.</p>
   <label class="field-label" for="login-email">Рабочая почта</label>
   <input id="login-email" type="email" autocomplete="email" placeholder="name@company.ru" required>
+  <label class="approval consent small"><input type="checkbox" id="login-consent" required><span class="checkbox" aria-hidden="true"><svg><use href="#i-check"/></svg></span><span>Согласен на обработку адреса почты для входа и хранения истории проверок по <a href="/static/privacy.html" target="_blank" rel="noopener">политике</a></span></label>
   <p id="login-email-error" class="form-error" role="alert"></p>
   <button class="button primary full" type="submit"><svg><use href="#i-mail"/></svg>Получить код</button>
  </form>
@@ -246,6 +277,7 @@
   <li><b>Проверьте обезличивание.</b> Модель увидит только тот текст, который вы подтвердили.</li>
   <li><b>Запустите агента.</b> Он ищет противоречия и риски и сверяется с открытыми нормативными источниками.</li>
   <li><b>Скачайте результат.</b> Правки в копии ТЗ выделены цветом и записаны исправлениями Word. Спорные вопросы остаются в отчете.</li>
+  <li><b>Проверьте результат у специалиста.</b> Это автоматический анализ, а не юридическое заключение. Файлы удаляются автоматически, их можно удалить и сразу.</li>
  </ol>
 </dialog>
 </body>

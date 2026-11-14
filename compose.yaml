@@ -2,8 +2,11 @@ services:
   audit:
     build: .
     ports:
-      - "127.0.0.1:8000:8000"
-    env_file: .env
+      - "127.0.0.1:${TZ_PORT:-8000}:8000"
+    # .env необязателен: без него сервис запускается в демо-режиме без модели.
+    env_file:
+      - path: .env
+        required: false
     environment:
       TZ_DATA_DIR: /data
     volumes:
@@ -16,6 +19,13 @@ services:
       - no-new-privileges:true
     pids_limit: 128
     mem_limit: 2g
-    cpus: 2
+    cpus: ${TZ_CPUS:-1}
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 volumes:
   audit-data:

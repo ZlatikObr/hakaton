@@ -15,7 +15,7 @@ class Document(Strict):
     blocks: list[Block]
     warnings: list[str] = Field(default_factory=list)
 
-Category = Literal['contradiction', 'competition', 'characteristics', 'classification', 'warranty', 'standards', 'completeness', 'acceptance', 'other']
+Category = Literal['contradiction', 'competition', 'characteristics', 'classification', 'warranty', 'standards', 'completeness', 'acceptance', 'language', 'other']
 
 class Anchor(Strict):
     block_id: str
@@ -46,7 +46,7 @@ class Finding(Strict):
     recommendation: str = Field(min_length=10, max_length=4000)
     basis: Literal['document', 'external'] = 'document'
     citations: list[Citation] = Field(default_factory=list, max_length=5)
-    edits: list[Edit] = Field(default_factory=list, max_length=6)
+    edits: list[Edit] = Field(default_factory=list, max_length=12)
     row_insertions: list[RowInsertion] = Field(default_factory=list, max_length=3)
 
 COVERAGE_TOPICS = ('object', 'numbers', 'scope', 'warranty_acceptance', 'classification', 'standards', 'language', 'competition', 'regime')

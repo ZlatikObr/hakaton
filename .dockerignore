@@ -2,10 +2,5 @@
 !requirements.lock
 !pyproject.toml
 !tz_audit/
-!tz_audit/*.py
 !Dockerfile
-
-!tz_audit/static/
-!tz_audit/static/*
-!tz_audit/data/
-!tz_audit/data/*
+tz_audit/**/__pycache__

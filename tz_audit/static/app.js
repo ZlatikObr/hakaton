@@ -6,7 +6,7 @@ const selectedChanges = new Set();
 const blockInfo = new Map();
 
 const coverageLabels = {object:'Предмет и заголовки',numbers:'Числа и размеры',scope:'Комплектность',warranty_acceptance:'Гарантия и приемка',classification:'Коды ОКПД 2',standards:'Стандарты и ГОСТ',language:'Опечатки и грамматика',competition:'Конкуренция и эквиваленты',regime:'Закон, СМП, нацрежим'};
-const categories = {contradiction:'Противоречие',competition:'Ограничение конкуренции',characteristics:'Характеристики',classification:'Код ОКПД 2',warranty:'Гарантия',standards:'Стандарты',completeness:'Комплектность',acceptance:'Приемка',other:'Прочее'};
+const categories = {contradiction:'Противоречие',competition:'Ограничение конкуренции',characteristics:'Характеристики',classification:'Код ОКПД 2',warranty:'Гарантия',standards:'Стандарты',completeness:'Комплектность',acceptance:'Приемка',language:'Опечатки и оформление',other:'Прочее'};
 const severity = {high:'Высокий',medium:'Средний',low:'Низкий'};
 const STAGES = [
  ['Подготовка пакета','обезличенный текст и правила отправки'],

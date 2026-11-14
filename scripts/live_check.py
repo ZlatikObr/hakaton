@@ -12,7 +12,7 @@ from tz_audit.agent import AgentConfig, OpenRouter
 from tz_audit.document import parse_docx
 from tz_audit.privacy import Redactor, public_payload
 
-CASES = ['Лифт - ТЗ исходное.docx','Метрологическое_оборудование_исходник.docx']
+CASES = ['examples/Лифт - ТЗ исходное.docx','examples/Метрология - ТЗ исходное.docx']
 
 class ObservedClient(OpenRouter):
     def complete(self, messages, config):

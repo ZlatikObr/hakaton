@@ -1,3 +1,4 @@
+import functools
 """Local redaction is a detector, not a proof of absence of PII.
 External use additionally requires an exact-digest local release review.
 """
@@ -42,6 +43,44 @@ def known_pattern(value):
     return (r'(?<!\w)' if value[0].isalnum() else '') + re.escape(value) + (r'(?!\w)' if value[-1].isalnum() else '')
 
 PUBLIC_TECHNICAL_TERMS = frozenset(v.casefold() for v in ['Полноцветное','Цветной','Цветная','Лазерная','Wi-Fi','Ultra Fine','Manual Transmission','Astra Linux','Intel Core','Microsoft Windows','Windows Enterprise','Windows Server','Apple AirPrint','Российской Федерации','Российская Федерация','Россия','России','РФ'])
+
+# Названия характеристик товара в таблицах ТЗ («Цвет чернил: синий»), которые NER принимает за имена.
+ATTRIBUTE = re.compile(r'(?:цвет|материал|размер|вес|объ[её]м|длин|ширин|высот|диаметр|толщин|плотност|состав|форм[аы]|нанесени|упаковк|тираж|механизм|корпус|покрыти|емкост|ёмкост|мощност|напряжени|частот|разъ[её]м|комплектаци|назначени|фасовк|гарантия|срок|марк|модел|артикул|бренд|сери[яи])\w*', re.I)
+BRAND_CONTEXT_AFTER = re.compile(r'^\s*(?:или|либо|or)\s+(?:аналог|эквивалент)', re.I)
+BRAND_CONTEXT_BEFORE = re.compile(r'(?:бренд|модель|артикул|марка|производитель|серия)\s*[:–-]?\s*$', re.I)
+
+
+def product_term(value, before, after):
+    """Подпись характеристики или латинское название бренда/модели — не персональные данные."""
+    words = value.strip(' :;•').split()
+    if words and all(ATTRIBUTE.fullmatch(w.strip('.,')) for w in words):
+        return True
+    if len(words) == 1 and re.match(r'^\s*[а-яё]*\s*:', after) and ATTRIBUTE.match(words[0]):
+        return True
+    latin = bool(words) and all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.&\'-]*', w) for w in words)
+    return latin and (bool(BRAND_CONTEXT_AFTER.match(after)) or bool(BRAND_CONTEXT_BEFORE.search(before)))
+
+
+NON_NAME_ENDING = re.compile(r'.*(?:ние|ния|ций|ция|ость|ный|ная|ное|ные|ый|ий|ая|ое|ие|ые|изм|тор|ктор|лен|ент)$', re.I)
+
+
+@functools.lru_cache(maxsize=1)
+def _morph():
+    from pymorphy3 import MorphAnalyzer
+    return MorphAnalyzer()
+
+
+@functools.lru_cache(maxsize=4096)
+def common_word(word):
+    """Одно русское слово, которое словарь не считает именем, фамилией или отчеством."""
+    if not re.fullmatch(r'[А-Яа-яЁё-]{3,}', word):
+        return False
+    morph = _morph()
+    parses = morph.parse(word)
+    if any(t in p.tag for p in parses for t in ('Name', 'Surn', 'Patr')):
+        return False
+    return morph.word_is_known(word.lower()) or bool(NON_NAME_ENDING.fullmatch(word))
+
 
 def technical_term(value):
     return value.strip(' :;•').casefold() in PUBLIC_TECHNICAL_TERMS
@@ -138,7 +177,8 @@ class Redactor:
                     value = chunk.group()[start:stop]
                     if kind not in {'PER', 'PERSON', 'LOC', 'GPE'} or not re.search(r'[А-Яа-яЁёA-Za-z]{3}', value):
                         continue
-                    if technical_term(value):
+                    words = value.strip(' :;•').split()
+                    if technical_term(value) or product_term(value, chunk.group()[:start], chunk.group()[stop:]) or (kind in {'PER', 'PERSON'} and len(words) == 1 and common_word(words[0])):
                         continue
                     if value.strip(' :;•') == 'Выберите' or all(TECHNICAL_NOUN.fullmatch(word) for word in value.strip(' :;•').split()):
                         continue

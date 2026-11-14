@@ -59,7 +59,7 @@ def test_samples_parse_and_privacy():
     from tz_audit.document import parse_docx
     from tz_audit.privacy import Redactor, public_payload
     root = Path(__file__).resolve().parents[1]
-    paths = list(root.glob('*исход*.docx'))
+    paths = list((root / 'examples').glob('*исход*.docx'))
     if not paths:
         pytest.skip('Пользовательские примеры не включаются в пакет')
     for path in paths:

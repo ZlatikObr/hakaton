@@ -8,7 +8,7 @@ from docx.oxml.ns import qn
 
 CATEGORIES = {'contradiction': 'Противоречия', 'competition': 'Конкуренция', 'characteristics': 'Характеристики',
     'classification': 'ОКПД 2', 'warranty': 'Гарантия', 'standards': 'Нормативные документы',
-    'completeness': 'Комплектность', 'acceptance': 'Приёмка', 'other': 'Прочее'}
+    'completeness': 'Комплектность', 'acceptance': 'Приёмка', 'language': 'Опечатки и оформление', 'other': 'Прочее'}
 
 
 def render_report(report, original):

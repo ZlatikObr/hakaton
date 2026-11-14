@@ -6,7 +6,7 @@ import httpx
 from tz_audit.privacy import Redactor, public_payload, release_digest
 from tz_audit.service import Service
 
-name='Метрологическое_оборудование_исходник.docx'
+name='examples/Метрология - ТЗ исходное.docx'
 with httpx.Client(base_url='http://127.0.0.1:8000',timeout=60) as c:
     assert c.get('/').status_code==200
     settings=c.get('/settings').json()

@@ -1,9 +1,12 @@
 """Local document workbench. HttpOnly same-site session; no remote assets."""
 import hmac
+import hashlib
 import json
 import re
 import os
 import secrets
+import sqlite3
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -36,17 +39,94 @@ def download_name(name, fallback):
     return clean or fallback
 
 
+def configured_public_origin():
+    """Canonical HTTPS origin behind our authenticated reverse proxy.
+
+    Do not infer this from client-controlled forwarded headers. Local mode keeps
+    its existing Host/Origin checks and non-Secure localhost session cookie.
+    """
+    raw = os.getenv('TZ_PUBLIC_ORIGIN', '')
+    if not raw:
+        return '', ''
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname or ''
+        labels = host.split('.')
+        valid_host = len(host) <= 253 and len(labels) >= 2 and all(
+            re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+            for label in labels)
+        if (raw != raw.strip() or any(c.isspace() for c in raw)
+                or parsed.scheme != 'https' or not valid_host
+                or parsed.username is not None or parsed.password is not None
+                or parsed.port not in (None, 443) or parsed.path not in ('', '/')
+                or parsed.query or parsed.fragment):
+            raise ValueError
+    except ValueError:
+        raise RuntimeError('TZ_PUBLIC_ORIGIN должен содержать только HTTPS-домен без пути и параметров.') from None
+    return 'https://' + host, host
+
+
 def create_app(data_dir=None):
+    public_origin, public_host = configured_public_origin()
     app = FastAPI(title='Редактор технических заданий', version='0.3.0', docs_url=None, redoc_url=None)
     service = Service(data_dir or os.getenv('TZ_DATA_DIR', 'runs'))
+    anonymous = os.getenv('TZ_PUBLIC_ACCESS', '').lower() == 'true'
     api_token = os.getenv('TZ_API_TOKEN') or secrets.token_urlsafe(32)
     hosts = ['127.0.0.1', 'localhost', '[::1]'] + (['testserver'] if data_dir is not None else [])
+    if public_host:
+        hosts.append(public_host)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     runtime = {'key': os.getenv('OPENROUTER_API_KEY', ''), 'model': os.getenv('OPENROUTER_MODEL', AgentConfig.model)}
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='tz-review')
     progress, state_lock = {}, threading.Lock()
 
+    # Необязательный личный кабинет: вход по коду из письма, история проверок.
+    accounts = Accounts(str(service.root))
+    secure_cookie = os.getenv('TZ_COOKIE_SECURE', 'false').lower() == 'true' or bool(public_origin)
+
+    def current_user(request):
+        return accounts.user(request.cookies.get('tz_user', ''))
+
+    def owns(request, job_id):
+        # Публичный режим: задание доступно только браузеру, который его создал.
+        marker = service.root / job_id / '.owner'
+        return marker.is_file() and hmac.compare_digest(marker.read_text(), getattr(request.state, 'owner', ''))
+
+    def public_quota(kind):
+        if not anonymous:
+            return
+        limit = int(os.getenv('TZ_PUBLIC_RUNS_PER_DAY', '30')) if kind == 'run' else 100
+        path = service.root / '.public-quota.sqlite3'
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        db = sqlite3.connect(path, timeout=10)
+        try:
+            with db:
+                db.execute('CREATE TABLE IF NOT EXISTS usage (kind TEXT, at REAL)')
+                db.execute('BEGIN IMMEDIATE')
+                db.execute('DELETE FROM usage WHERE at < ?', (time.time()-86400,))
+                count = db.execute('SELECT count(*) FROM usage WHERE kind=?', (kind,)).fetchone()[0]
+                if count >= limit:
+                    raise HTTPException(429, 'Достигнут суточный лимит сервиса. Попробуйте позже.')
+                db.execute('INSERT INTO usage VALUES (?, ?)', (kind, time.time()))
+        finally:
+            db.close()
+
     def authorize(request: Request, authorization: str = Header(default='')):
+        if anonymous:
+            token = request.cookies.get('tz_visitor', '')
+            if not re.fullmatch(r'[a-f0-9]{64}', token):
+                raise HTTPException(401, 'Откройте главную страницу сайта.')
+            owner = hashlib.sha256(token.encode()).hexdigest()
+            request.state.owner = owner
+            job_id = request.path_params.get('job_id')
+            if job_id:
+                if not re.fullmatch(r'[a-f0-9]{32}', job_id) or not owns(request, job_id):
+                    raise HTTPException(404, 'Документ не найден.')
+            origin = request.headers.get('origin')
+            if (origin and origin != (public_origin or str(request.base_url).rstrip('/'))) or request.headers.get('sec-fetch-site') == 'cross-site':
+                raise HTTPException(403, 'Запрос с другого сайта запрещён.')
+            return
         if len(api_token) < 24:
             raise HTTPException(503, 'Задайте TZ_API_TOKEN длиной не менее 24 символов.')
         if hmac.compare_digest(authorization, 'Bearer ' + api_token):
@@ -55,7 +135,8 @@ def create_app(data_dir=None):
         if not hmac.compare_digest(cookie, api_token):
             raise HTTPException(401, 'Откройте главную страницу для локальной сессии.')
         origin = request.headers.get('origin')
-        if origin and origin != str(request.base_url).rstrip('/'):
+        expected_origin = public_origin or str(request.base_url).rstrip('/')
+        if origin and origin != expected_origin:
             raise HTTPException(403, 'Запрос с другого сайта запрещён.')
         if request.headers.get('sec-fetch-site') == 'cross-site':
             raise HTTPException(403, 'Запрос с другого сайта запрещён.')
@@ -89,9 +170,18 @@ def create_app(data_dir=None):
         app.mount('/static', StaticFiles(directory=STATIC), name='static')
 
     @app.get('/')
-    def home():
+    def home(request: Request):
         response = FileResponse(STATIC / 'index.html')
-        response.set_cookie('tz_session', api_token, httponly=True, samesite='strict', max_age=86400)
+        if anonymous:
+            token = request.cookies.get('tz_visitor', '')
+            if not re.fullmatch(r'[a-f0-9]{64}', token):
+                token = secrets.token_hex(32)
+            response.set_cookie('tz_visitor', token, httponly=True, samesite='strict',
+                secure=bool(public_origin), max_age=2592000)
+            response.delete_cookie('tz_session')
+            return response
+        response.set_cookie('tz_session', api_token, httponly=True, samesite='strict',
+            secure=bool(public_origin), max_age=86400)
         return response
 
     @app.get('/health')
@@ -99,17 +189,10 @@ def create_app(data_dir=None):
 
     @app.get('/settings', dependencies=[Depends(authorize)])
     def settings():
-        return {'has_key': bool(runtime['key']), 'model': runtime['model'], 'models': MODELS,
+        return {'can_edit_key': not anonymous, 'has_key': bool(runtime['key']), 'model': runtime['model'], 'models': MODELS,
             'model_routes': {model: route_info(model) for model in MODELS},
             'search_backend': os.getenv('TZ_SEARCH_BACKEND', 'openrouter'),
             'privacy_profiles': privacy_profiles(), 'privacy_default': 'natasha'}
-
-    # Необязательный личный кабинет: вход по коду из письма, история проверок.
-    accounts = Accounts(str(service.root))
-    secure_cookie = os.getenv('TZ_COOKIE_SECURE', 'false').lower() == 'true'
-
-    def current_user(request):
-        return accounts.user(request.cookies.get('tz_user', ''))
 
     class EmailBody(Strict):
         email: str = Field(min_length=3, max_length=254)
@@ -129,6 +212,7 @@ def create_app(data_dir=None):
 
     @app.post('/auth/request', dependencies=[Depends(authorize)])
     async def auth_request(body: EmailBody):
+        public_quota('login')
         try:
             code = await run_in_threadpool(accounts.request_code, body.email)
         except AuthError as exc:
@@ -187,6 +271,8 @@ def create_app(data_dir=None):
         if not email:
             raise HTTPException(401, 'Войдите по почте, чтобы сохранять проверки.')
         await safe_call(service.path, body.job_id)
+        if anonymous and not owns(request, body.job_id):
+            raise HTTPException(404, 'Документ не найден.')
         await run_in_threadpool(accounts.attach, email, body.job_id, body.filename)
         return {'ok': True}
 
@@ -195,6 +281,8 @@ def create_app(data_dir=None):
 
     @app.post('/settings', dependencies=[Depends(authorize)])
     def save_settings(body: Settings):
+        if anonymous:
+            raise HTTPException(403, 'Настройки подключения изменяет владелец сервера.')
         if any(c.isspace() for c in body.api_key) or not body.api_key.isascii():
             raise HTTPException(400, 'Проверьте формат API-ключа.')
         with state_lock:
@@ -202,11 +290,16 @@ def create_app(data_dir=None):
         return {'has_key': True}
 
     @app.post('/jobs', dependencies=[Depends(authorize)])
-    async def prepare(file: UploadFile = File(...), privacy_backend: str = Form('natasha')):
+    async def prepare(request: Request, file: UploadFile = File(...), privacy_backend: str = Form('natasha')):
         try:
             if not (file.filename or '').lower().endswith('.docx'):
                 raise HTTPException(400, 'Поддерживается только DOCX.')
-            return await safe_call(service.prepare, await file.read(MAX_FILE + 1), privacy_backend)
+            public_quota('upload')
+            result = await safe_call(service.prepare, await file.read(MAX_FILE + 1), privacy_backend)
+            if anonymous:
+                from .service import write_private
+                write_private(service.root / result['job_id'] / '.owner', request.state.owner)
+            return result
         finally:
             await file.close()
 
@@ -240,12 +333,19 @@ def create_app(data_dir=None):
         return await safe_call(service.proposals, job_id)
 
     @app.post('/jobs/{job_id}/apply-selected', dependencies=[Depends(authorize)])
-    async def apply_selected(job_id: str, body: SelectedChanges):
-        return await safe_call(service.apply_selected, job_id, body.report_digest, body.change_ids)
+    async def apply_selected(job_id: str, body: SelectedChanges, request: Request):
+        public_quota('upload')
+        result = await safe_call(service.apply_selected, job_id, body.report_digest, body.change_ids)
+        if anonymous:
+            from .service import write_private
+            write_private(service.root / result['job_id'] / '.owner', request.state.owner)
+        return result
 
     # Compatibility route for CLI/integrations: synchronous result.
     @app.post('/jobs/{job_id}/analyze', dependencies=[Depends(authorize)])
     async def analyze(job_id: str, body: Analyze):
+        if anonymous:
+            raise HTTPException(403, 'Используйте запуск через очередь обработки.')
         return await safe_call(service.analyze, job_id, body.mode, body.approved_digest)
 
     @app.post('/jobs/{job_id}/run', dependencies=[Depends(authorize)], status_code=202)
@@ -263,6 +363,8 @@ def create_app(data_dir=None):
                 raise HTTPException(409, 'Документ уже обрабатывается.')
             if sum(p.snapshot()['status'] in {'queued', 'running', 'cancelling'} for p in progress.values()) >= 3:
                 raise HTTPException(429, 'Очередь занята. Дождитесь завершения текущих документов.')
+            if body.mode == 'openrouter':
+                public_quota('run')
             control = RunControl()
             progress[job_id] = control
         def work():
